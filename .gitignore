@@ -1,0 +1,11 @@
+/*
+!/.gitattributes
+!/.gitignore
+!/LICENSE
+!/README.md
+!/magic-pointer.wh.cpp
+!/assets/
+/assets/*
+!/assets/magic-pointer/
+/assets/magic-pointer/*
+!/assets/magic-pointer/preview.png
