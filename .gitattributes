@@ -1,3 +1,4 @@
 * text=auto eol=lf
 magic-pointer.wh.cpp -text
 *.png binary
+*.gif binary

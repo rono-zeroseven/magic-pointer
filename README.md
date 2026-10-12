@@ -3,9 +3,11 @@
 Shake your mouse, select anything on screen, and ask Gemini about it.
 Magic Pointer brings the Googlebook-style AI pointer to Windows.
 
+[GitHub](https://github.com/rono-zeroseven) · Discord: **rono007**
+
 **[Install with Windhawk](https://windhawk.net/mods/magic-pointer)**
 
-![Magic Pointer selecting an image](assets/magic-pointer/preview.png)
+![Magic Pointer in action](assets/magic-pointer/preview.gif)
 
 ## Getting started
 
@@ -32,9 +34,9 @@ Press **Esc** or right-click to dismiss the pointer.
 Browser actions work without an API key. Magic Pointer prepares a new Gemini
 draft for you to review and send.
 
-For answers directly in the card, add a
-[Gemini API key](https://aistudio.google.com/apikey) in the mod's Windhawk
-settings. Smart suggestions are optional and disabled by default.
+Add an API key from [Google AI Studio](https://aistudio.google.com/apikey) in the
+mod's Windhawk settings to receive answers directly in the card.
+**Smart suggestions** are optional and disabled by default.
 
 ## Privacy
 
@@ -43,6 +45,12 @@ content to Google's services. Enabling Smart suggestions with an API key sends
 each selection to Gemini automatically. See the
 [mod documentation](https://windhawk.net/mods/magic-pointer) for the full privacy
 and temporary-file details.
+
+## Report a problem
+
+[Open an issue](https://github.com/rono-zeroseven/magic-pointer/issues) with your
+Windows version, Windhawk version, Magic Pointer version, and steps to reproduce
+the problem. Include screenshots when useful and remove private content.
 
 ## License
 
