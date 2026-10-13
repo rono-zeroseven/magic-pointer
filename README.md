@@ -35,8 +35,11 @@ Browser actions work without an API key. Magic Pointer prepares a new Gemini
 draft for you to review and send.
 
 Add an API key from [Google AI Studio](https://aistudio.google.com/apikey) in the
-mod's Windhawk settings to receive answers directly in the card.
-**Smart suggestions** are optional and disabled by default.
+mod's Windhawk settings to receive answers directly in the card. You can ask
+follow-up questions.
+
+**Smart suggestions** are optional and disabled by default. When enabled,
+Gemini suggests up to three things to do with each selection.
 
 ## Privacy
 
