@@ -28,6 +28,7 @@ Press **Esc** or right-click to dismiss the pointer.
 - Recognize and copy text with Windows OCR.
 - Translate selected text and search images with Google Lens.
 - Customize appearance, activation, browser, and excluded apps.
+- Speaks 33 languages and follows your Windows display language.
 
 ## Gemini
 
@@ -40,6 +41,22 @@ follow-up questions.
 
 **Smart suggestions** are optional and disabled by default. When enabled,
 Gemini suggests up to three things to do with each selection.
+
+## Languages
+
+The hint, the card, its buttons and its messages appear in your Windows display
+language, or in the language you choose with the **Language** setting. The
+settings page is translated too, in the languages Windhawk itself offers.
+
+Available: English, Arabic, Bengali, Chinese (Simplified and Traditional),
+Croatian, Czech, Danish, Dutch, Finnish, French, German, Greek, Hebrew, Hindi,
+Hungarian, Indonesian, Italian, Japanese, Korean, Norwegian, Persian, Polish,
+Portuguese (Brazil), Romanian, Russian, Spanish, Swedish, Tamil, Thai, Turkish,
+Ukrainian and Vietnamese. Any other language shows English.
+
+The translations were written with the help of AI, and not every one has been
+checked by a native speaker. To fix or improve a text, or to add a language,
+[open an issue](https://github.com/rono-zeroseven/magic-pointer/issues).
 
 ## Privacy
 
