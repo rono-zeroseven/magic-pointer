@@ -1,6 +1,6 @@
 // ==WindhawkMod==
-// @id              magic-pointer-fork
-// @name            Magic Pointer - Fork
+// @id              magic-pointer
+// @name            Magic Pointer
 // @description     Shake the mouse cursor to summon a Googlebook-style Magic Pointer, then point at or select anything on screen and ask Gemini AI about it
 // @description:ar  حرك مؤشر الماوس لاستدعاء Magic Pointer بأسلوب Googlebook، ثم أشر إلى أي شيء على الشاشة أو حدده واسأل Gemini AI عنه
 // @description:bn  মাউস কার্সার ঝাঁকিয়ে Googlebook ধাঁচের Magic Pointer ডাকুন, তারপর পর্দার যেকোনো কিছুর দিকে নির্দেশ করুন বা সেটি বেছে নিন এবং Gemini AI-কে সে সম্পর্কে জিজ্ঞাসা করুন
