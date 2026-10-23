@@ -1,6 +1,6 @@
 // ==WindhawkMod==
-// @id              magic-pointer
-// @name            Magic Pointer
+// @id              magic-pointer-fork
+// @name            Magic Pointer - Fork
 // @description     Shake the mouse cursor to summon a Googlebook-style Magic Pointer, then point at or select anything on screen and ask Gemini AI about it
 // @description:ar  حرك مؤشر الماوس لاستدعاء Magic Pointer بأسلوب Googlebook، ثم أشر إلى أي شيء على الشاشة أو حدده واسأل Gemini AI عنه
 // @description:bn  মাউস কার্সার ঝাঁকিয়ে Googlebook ধাঁচের Magic Pointer ডাকুন, তারপর পর্দার যেকোনো কিছুর দিকে নির্দেশ করুন বা সেটি বেছে নিন এবং Gemini AI-কে সে সম্পর্কে জিজ্ঞাসা করুন
@@ -342,6 +342,12 @@ the problem. Include screenshots when useful and remove private content.
   $description:vi: "1 cần lắc mạnh và nhanh. 10 kích hoạt chỉ với một cái lắc nhẹ, nhỏ."
   $description:zh-CN: "1 需要幅度大、速度快的摇动。10 只需轻微、柔和的晃动即可激活。"
   $description:zh-TW: "1 需要幅度大、速度快的搖動。10 只需輕微、柔和的晃動即可啟用。"
+- longPressWin: true
+  $name: Hold Windows key to activate
+  $description: Hold either Windows key to summon the Magic Pointer
+- longPressDuration: 500
+  $name: Windows key hold duration (ms)
+  $description: Hold time required to activate (100-2000 ms)
 - hotkey: Win+Shift+G
   $name: Keyboard shortcut
   $description: >-
@@ -2940,6 +2946,8 @@ struct Settings {
     bool shake = true;
     int sensitivity = 5;
     std::wstring hotkey;
+    bool longPressWin = true;
+    int longPressDuration = 500;
     std::vector<std::wstring> excludedApps;
     bool disableInFullscreen = true;
     std::wstring glowColor;
@@ -2975,6 +2983,8 @@ Settings LoadSettings() {
     const int sensitivity = Wh_GetIntSetting(L"sensitivity");
     s.sensitivity = sensitivity <= 0 ? 5 : std::min(sensitivity, 10);
     s.hotkey = GetStringSetting(L"hotkey");
+    s.longPressWin = Wh_GetIntSetting(L"longPressWin") != 0;
+    s.longPressDuration = std::clamp(Wh_GetIntSetting(L"longPressDuration"), 100, 2000);
     for (int i = 0; i < 256; i++) {
         const std::wstring app =
             GetStringSetting((L"excludedApps[" + std::to_wstring(i) + L"]").c_str());
@@ -12895,6 +12905,13 @@ HWND g_shakePollingWindow;
 std::wstring g_windhawkExecutable;
 std::wstring g_windhawkUiDirectory;
 constexpr UINT_PTR kShakePollingTimer = 1;
+constexpr UINT_PTR kLongPressWinTimer = 2;
+ULONGLONG g_winKeyDownAt = 0;
+bool g_winLongPressTriggered = false;
+bool g_winLeftDown = false;
+bool g_winRightDown = false;
+bool g_winKeyForwarded = false;
+HHOOK g_winKeyboardHook = nullptr;
 
 HANDLE g_timer;
 HANDLE g_rippleTimer;
@@ -13481,6 +13498,13 @@ void ApplySettings(const Settings& settings) {
     DeactivatePointer(now, false);
     g_ripple.Stop();
     g_settings = settings;
+    if (g_settings.longPressWin) {
+        SetTimer(g_messageWindow, kLongPressWinTimer, 20, nullptr);
+    } else {
+        KillTimer(g_messageWindow, kLongPressWinTimer);
+        g_winKeyDownAt = 0;
+        g_winLongPressTriggered = false;
+    }
     SetLanguage(g_settings.language);
     g_glow = ParseGlowColor(g_settings.glowColor);
     g_styleVersion++;
@@ -13593,6 +13617,111 @@ void Shutdown() {
     RegisterRawInputDevices(&device, 1, sizeof(device));
 }
 
+// Intercept the Windows key so its normal Start-menu action can be deferred until
+// release. A short tap is replayed as an ordinary Win-key tap; a long press is
+// consumed and activates Magic Pointer without opening Start.
+LRESULT CALLBACK WindowsKeyHookProc(int code, WPARAM wParam, LPARAM lParam) {
+    if (code < 0) {
+        return CallNextHookEx(g_winKeyboardHook, code, wParam, lParam);
+    }
+
+    const auto* key = reinterpret_cast<const KBDLLHOOKSTRUCT*>(lParam);
+    if (!key || (key->flags & LLKHF_INJECTED)) {
+        return CallNextHookEx(g_winKeyboardHook, code, wParam, lParam);
+    }
+
+    const bool left = key->vkCode == VK_LWIN;
+    const bool right = key->vkCode == VK_RWIN;
+    if (!left && !right) {
+        // Preserve Win+key shortcuts: if another key is pressed while Win is held,
+        // forward a synthetic Win-down before letting that key through.
+        if ((wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN) &&
+            (g_winLeftDown || g_winRightDown) && !g_winLongPressTriggered &&
+            !g_winKeyForwarded) {
+            INPUT input{};
+            input.type = INPUT_KEYBOARD;
+            input.ki.wVk = g_winLeftDown ? VK_LWIN : VK_RWIN;
+            SendInput(1, &input, sizeof(input));
+            g_winKeyForwarded = true;
+        }
+        return CallNextHookEx(g_winKeyboardHook, code, wParam, lParam);
+    }
+
+    const bool keyDown = wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN;
+    const bool keyUp = wParam == WM_KEYUP || wParam == WM_SYSKEYUP;
+    bool& thisDown = left ? g_winLeftDown : g_winRightDown;
+    if (!g_settings.longPressWin && !thisDown) {
+        return CallNextHookEx(g_winKeyboardHook, code, wParam, lParam);
+    }
+    if (keyDown) {
+        if (!thisDown && g_state != PointerState::Off) {
+            return CallNextHookEx(g_winKeyboardHook, code, wParam, lParam);
+        }
+        if (!thisDown) {
+            thisDown = true;
+            if (g_winKeyDownAt == 0) {
+                g_winKeyDownAt = GetTickCount64();
+                g_winLongPressTriggered = false;
+                g_winKeyForwarded = false;
+            }
+        }
+        return 1;  // Do not let the physical key open Start yet.
+    }
+    if (keyUp) {
+        bool& thisDown = left ? g_winLeftDown : g_winRightDown;
+        thisDown = false;
+        if (g_winKeyForwarded) {
+            INPUT input{};
+            input.type = INPUT_KEYBOARD;
+            input.ki.wVk = left ? VK_LWIN : VK_RWIN;
+            input.ki.dwFlags = KEYEVENTF_KEYUP;
+            SendInput(1, &input, sizeof(input));
+        } else if (!g_winLongPressTriggered && g_state == PointerState::Off) {
+            // It was a short tap: replay it so the Windows key keeps its usual behavior.
+            INPUT inputs[2]{};
+            inputs[0].type = INPUT_KEYBOARD;
+            inputs[0].ki.wVk = left ? VK_LWIN : VK_RWIN;
+            inputs[1].type = INPUT_KEYBOARD;
+            inputs[1].ki.wVk = left ? VK_LWIN : VK_RWIN;
+            inputs[1].ki.dwFlags = KEYEVENTF_KEYUP;
+            SendInput(2, inputs, sizeof(INPUT));
+        }
+        if (!g_winLeftDown && !g_winRightDown) {
+            g_winKeyDownAt = 0;
+            g_winLongPressTriggered = false;
+            g_winKeyForwarded = false;
+        }
+        return 1;
+    }
+
+    return CallNextHookEx(g_winKeyboardHook, code, wParam, lParam);
+}
+
+void PollWindowsKeyLongPress() {
+    if (!g_settings.longPressWin || g_state != PointerState::Off) {
+        // Keep the held-key timestamp while the physical key remains down, so the
+        // hook can still consume its release after activation or a settings change.
+        if (!g_winLeftDown && !g_winRightDown) {
+            g_winKeyDownAt = 0;
+            g_winLongPressTriggered = false;
+        }
+        return;
+    }
+
+    if (!g_winLeftDown && !g_winRightDown) {
+        g_winKeyDownAt = 0;
+        g_winLongPressTriggered = false;
+        return;
+    }
+
+    const ULONGLONG now = GetTickCount64();
+    if (!g_winLongPressTriggered && !g_winKeyForwarded && g_winKeyDownAt != 0 &&
+        now - g_winKeyDownAt >= static_cast<ULONGLONG>(g_settings.longPressDuration)) {
+        g_winLongPressTriggered = true;
+        OnHotkey(kHotkeyActivate);
+    }
+}
+
 LRESULT CALLBACK MessageWndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
     switch (message) {
         case WM_INPUT:
@@ -13604,6 +13733,10 @@ LRESULT CALLBACK MessageWndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
             return 0;
 
         case WM_TIMER:
+            if (wParam == kLongPressWinTimer) {
+                PollWindowsKeyLongPress();
+                return 0;
+            }
             if (wParam == kShakePollingTimer && g_shakePollingWindow) {
                 if (GetForegroundWindow() != g_shakePollingWindow) {
                     RefreshShakePolling();
@@ -13739,6 +13872,15 @@ DWORD WINAPI WorkerThreadProc(LPVOID) {
         return fail(L"CreateWindowExW");
     }
 
+    g_winKeyboardHook = SetWindowsHookExW(WH_KEYBOARD_LL, WindowsKeyHookProc,
+                                          g_instance, 0);
+    if (!g_winKeyboardHook) {
+        Wh_Log(L"Windows-key long-press hook failed: %u", GetLastError());
+    }
+    if (g_settings.longPressWin) {
+        SetTimer(g_messageWindow, kLongPressWinTimer, 20, nullptr);
+    }
+
     g_timer = CreateWaitableTimerExW(nullptr, nullptr,
                                      CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
                                      TIMER_ALL_ACCESS);
@@ -13818,6 +13960,10 @@ DWORD WINAPI WorkerThreadProc(LPVOID) {
         }
     }
 
+    if (g_winKeyboardHook) {
+        UnhookWindowsHookEx(g_winKeyboardHook);
+        g_winKeyboardHook = nullptr;
+    }
     if (g_messageWindow && IsWindow(g_messageWindow)) {
         DestroyWindow(g_messageWindow);  // Only if the loop failed.
     }
