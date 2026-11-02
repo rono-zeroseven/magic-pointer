@@ -4404,12 +4404,12 @@ class FontCache {
         iconGlyphs_.clear();
     }
 
-    HFONT Get(int px, int weight, bool mono = false) {
-        return Find(px, weight, mono ? 1 : 0);
+    HFONT Get(int px, int weight, bool mono = false, bool italic = false) {
+        return Find(px, weight, mono ? 1 : 0, italic);
     }
 
     HFONT Icons(int px) {
-        return iconFace_.empty() ? nullptr : Find(px, FW_NORMAL, 2);
+        return iconFace_.empty() ? nullptr : Find(px, FW_NORMAL, 2, false);
     }
 
     bool HasIcon(wchar_t glyph) {
@@ -4447,23 +4447,25 @@ class FontCache {
         int px;
         int weight;
         int kind;  // 0 = text, 1 = monospace, 2 = icons.
+        bool italic;
         HFONT font;
     };
 
-    HFONT Find(int px, int weight, int kind) {
+    HFONT Find(int px, int weight, int kind, bool italic) {
         px = std::max(px, 6);
         for (const Entry& entry : entries_) {
-            if (entry.px == px && entry.weight == weight && entry.kind == kind) {
+            if (entry.px == px && entry.weight == weight &&
+                entry.kind == kind && entry.italic == italic) {
                 return entry.font;
             }
         }
         const std::wstring& face = kind == 2 ? iconFace_ : kind == 1 ? monoFace_ : face_;
-        HFONT font = CreateFontW(-px, 0, 0, 0, weight, FALSE, FALSE, FALSE,
-                                 DEFAULT_CHARSET, OUT_TT_PRECIS,
+        HFONT font = CreateFontW(-px, 0, 0, 0, weight, italic ? TRUE : FALSE, FALSE,
+                                 FALSE, DEFAULT_CHARSET, OUT_TT_PRECIS,
                                  CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY,
                                  DEFAULT_PITCH | FF_DONTCARE, face.c_str());
         if (font) {
-            entries_.push_back({px, weight, kind, font});
+            entries_.push_back({px, weight, kind, italic, font});
         }
         return font ? font : static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
     }
@@ -12015,43 +12017,895 @@ struct Chip {
     ChipAction action;
 };
 
-struct TextBlock {
-    enum class Kind { Paragraph, Heading, Bullet, Code };
-    Kind kind;
-    std::wstring bullet;
-    std::wstring text;
+enum : uint8_t {
+    kRunBold = 1 << 0,
+    kRunItalic = 1 << 1,
+    kRunCode = 1 << 2,
 };
 
-std::wstring StripInlineMarkdown(const std::wstring& line) {
+struct TextRun {
+    std::wstring text;
+    uint8_t style = 0;
+};
+
+struct TextBlock {
+    enum class Kind { Paragraph, Heading, Bullet, Code, Rule, Quote, Math };
+    Kind kind = Kind::Paragraph;
+    std::wstring bullet;
+    std::wstring text;
+    std::vector<TextRun> runs;
+    int indent = 0;
+};
+
+void AppendRun(std::vector<TextRun>& runs, const std::wstring& text, uint8_t style) {
+    if (text.empty()) {
+        return;
+    }
+    if (!runs.empty() && runs.back().style == style) {
+        runs.back().text += text;
+    } else {
+        runs.push_back({text, style});
+    }
+}
+
+std::wstring RunsText(const std::vector<TextRun>& runs) {
+    std::wstring text;
+    for (const TextRun& run : runs) {
+        text += run.text;
+    }
+    return text;
+}
+
+std::vector<TextRun> ExpandTabs(const std::vector<TextRun>& runs) {
+    std::vector<TextRun> out;
+    int column = 0;
+    for (const TextRun& run : runs) {
+        std::wstring text;
+        for (wchar_t c : run.text) {
+            if (c == L'\t') {
+                const int spaces = 4 - column % 4;
+                text.append(spaces, L' ');
+                column += spaces;
+            } else {
+                text += c;
+                column = c == L'\n' ? 0 : column + 1;
+            }
+        }
+        AppendRun(out, text, run.style);
+    }
+    return out;
+}
+
+const wchar_t* SubscriptFor(wchar_t c) {
+    switch (c) {
+        case L'0': return L"\x2080";
+        case L'1': return L"\x2081";
+        case L'2': return L"\x2082";
+        case L'3': return L"\x2083";
+        case L'4': return L"\x2084";
+        case L'5': return L"\x2085";
+        case L'6': return L"\x2086";
+        case L'7': return L"\x2087";
+        case L'8': return L"\x2088";
+        case L'9': return L"\x2089";
+        case L'+': return L"\x208a";
+        case L'-': return L"\x208b";
+        case L'=': return L"\x208c";
+        case L'(': return L"\x208d";
+        case L')': return L"\x208e";
+        case L'a': return L"\x2090";
+        case L'e': return L"\x2091";
+        case L'h': return L"\x2095";
+        case L'i': return L"\x1d62";
+        case L'j': return L"\x2c7c";
+        case L'k': return L"\x2096";
+        case L'l': return L"\x2097";
+        case L'm': return L"\x2098";
+        case L'n': return L"\x2099";
+        case L'o': return L"\x2092";
+        case L'p': return L"\x209a";
+        case L'r': return L"\x1d63";
+        case L's': return L"\x209b";
+        case L't': return L"\x209c";
+        case L'u': return L"\x1d64";
+        case L'v': return L"\x1d65";
+        case L'x': return L"\x2093";
+        default: return nullptr;
+    }
+}
+
+const wchar_t* SuperscriptFor(wchar_t c) {
+    switch (c) {
+        case L'0': return L"\x2070";
+        case L'1': return L"\x00b9";
+        case L'2': return L"\x00b2";
+        case L'3': return L"\x00b3";
+        case L'4': return L"\x2074";
+        case L'5': return L"\x2075";
+        case L'6': return L"\x2076";
+        case L'7': return L"\x2077";
+        case L'8': return L"\x2078";
+        case L'9': return L"\x2079";
+        case L'+': return L"\x207a";
+        case L'-': return L"\x207b";
+        case L'=': return L"\x207c";
+        case L'(': return L"\x207d";
+        case L')': return L"\x207e";
+        case L'a': return L"\x1d43";
+        case L'b': return L"\x1d47";
+        case L'c': return L"\x1d9c";
+        case L'd': return L"\x1d48";
+        case L'e': return L"\x1d49";
+        case L'f': return L"\x1da0";
+        case L'g': return L"\x1d4d";
+        case L'h': return L"\x02b0";
+        case L'i': return L"\x2071";
+        case L'j': return L"\x02b2";
+        case L'k': return L"\x1d4f";
+        case L'l': return L"\x02e1";
+        case L'm': return L"\x1d50";
+        case L'n': return L"\x207f";
+        case L'o': return L"\x1d52";
+        case L'p': return L"\x1d56";
+        case L'r': return L"\x02b3";
+        case L's': return L"\x02e2";
+        case L't': return L"\x1d57";
+        case L'u': return L"\x1d58";
+        case L'v': return L"\x1d5b";
+        case L'w': return L"\x02b7";
+        case L'x': return L"\x02e3";
+        case L'y': return L"\x02b8";
+        case L'z': return L"\x1dbb";
+        default: return nullptr;
+    }
+}
+
+std::wstring MapScript(const std::wstring& text, bool sub) {
+    if (text.empty()) {
+        return text;
+    }
+    if (text == L"\x00b0") {  // A degree sign is already a superscript.
+        return text;
+    }
     std::wstring out;
-    out.reserve(line.size());
-    for (size_t i = 0; i < line.size(); i++) {
-        const wchar_t c = line[i];
-        if ((c == L'*' || c == L'_') && i + 1 < line.size() && line[i + 1] == c) {
+    for (wchar_t c : text) {
+        const wchar_t* mapped = sub ? SubscriptFor(c) : SuperscriptFor(c);
+        if (!mapped) {
+            return std::wstring(sub ? L"_" : L"^") + text;
+        }
+        out += mapped;
+    }
+    return out;
+}
+
+bool ReadLatexGroup(const std::wstring& s, size_t& i, std::wstring& out) {
+    if (i >= s.size() || s[i] != L'{') {
+        return false;
+    }
+    const size_t start = i + 1;
+    int depth = 0;
+    for (size_t j = i; j < s.size(); j++) {
+        if (s[j] == L'\\' && j + 1 < s.size()) {
+            j++;
+            continue;
+        }
+        if (s[j] == L'{') {
+            depth++;
+        } else if (s[j] == L'}') {
+            depth--;
+            if (depth == 0) {
+                out = s.substr(start, j - start);
+                i = j + 1;
+                return true;
+            }
+        }
+    }
+    out = s.substr(start);
+    i = s.size();
+    return true;
+}
+
+std::wstring LatexToText(const std::wstring& s);
+
+std::wstring ReadLatexToken(const std::wstring& s, size_t& i) {
+    while (i < s.size() && iswspace(s[i])) {
+        i++;
+    }
+    if (i >= s.size()) {
+        return {};
+    }
+    if (s[i] == L'{') {
+        std::wstring group;
+        ReadLatexGroup(s, i, group);
+        return group;
+    }
+    if (s[i] == L'\\') {
+        const size_t start = i++;
+        if (i < s.size() && iswalpha(s[i])) {
+            while (i < s.size() && iswalpha(s[i])) {
+                i++;
+            }
+        } else if (i < s.size()) {
             i++;
+        }
+        return s.substr(start, i - start);
+    }
+    if (IS_HIGH_SURROGATE(s[i]) && i + 1 < s.size() && IS_LOW_SURROGATE(s[i + 1])) {
+        std::wstring token = s.substr(i, 2);
+        i += 2;
+        return token;
+    }
+    return std::wstring(1, s[i++]);
+}
+
+const wchar_t* LatexSymbol(const std::wstring& name) {
+    struct Entry {
+        const wchar_t* name;
+        const wchar_t* value;
+    };
+    static const Entry kSymbols[] = {
+        {L"alpha", L"\x03b1"}, {L"beta", L"\x03b2"}, {L"gamma", L"\x03b3"},
+        {L"delta", L"\x03b4"}, {L"epsilon", L"\x03b5"}, {L"varepsilon", L"\x03b5"},
+        {L"zeta", L"\x03b6"}, {L"eta", L"\x03b7"}, {L"theta", L"\x03b8"},
+        {L"vartheta", L"\x03d1"}, {L"iota", L"\x03b9"}, {L"kappa", L"\x03ba"},
+        {L"lambda", L"\x03bb"}, {L"mu", L"\x03bc"}, {L"nu", L"\x03bd"},
+        {L"xi", L"\x03be"}, {L"pi", L"\x03c0"}, {L"varpi", L"\x03d6"},
+        {L"rho", L"\x03c1"}, {L"varrho", L"\x03f1"}, {L"sigma", L"\x03c3"},
+        {L"varsigma", L"\x03c2"}, {L"tau", L"\x03c4"}, {L"upsilon", L"\x03c5"},
+        {L"phi", L"\x03c6"}, {L"varphi", L"\x03d5"}, {L"chi", L"\x03c7"},
+        {L"psi", L"\x03c8"}, {L"omega", L"\x03c9"},
+        {L"Gamma", L"\x0393"}, {L"Delta", L"\x0394"}, {L"Theta", L"\x0398"},
+        {L"Lambda", L"\x039b"}, {L"Xi", L"\x039e"}, {L"Pi", L"\x03a0"},
+        {L"Sigma", L"\x03a3"}, {L"Upsilon", L"\x03a5"}, {L"Phi", L"\x03a6"},
+        {L"Psi", L"\x03a8"}, {L"Omega", L"\x03a9"},
+        {L"times", L"\x00d7"}, {L"div", L"\x00f7"}, {L"pm", L"\x00b1"},
+        {L"mp", L"\x2213"}, {L"cdot", L"\x00b7"}, {L"ast", L"\x2217"},
+        {L"circ", L"\x00b0"}, {L"degree", L"\x00b0"},
+        {L"rightarrow", L"\x2192"}, {L"to", L"\x2192"}, {L"leftarrow", L"\x2190"},
+        {L"leftrightarrow", L"\x2194"}, {L"Rightarrow", L"\x21d2"},
+        {L"Leftarrow", L"\x21d0"}, {L"Leftrightarrow", L"\x21d4"},
+        {L"uparrow", L"\x2191"}, {L"downarrow", L"\x2193"},
+        {L"leq", L"\x2264"}, {L"le", L"\x2264"}, {L"geq", L"\x2265"},
+        {L"ge", L"\x2265"}, {L"neq", L"\x2260"}, {L"ne", L"\x2260"},
+        {L"approx", L"\x2248"}, {L"equiv", L"\x2261"}, {L"sim", L"\x223c"},
+        {L"propto", L"\x221d"}, {L"infty", L"\x221e"}, {L"partial", L"\x2202"},
+        {L"nabla", L"\x2207"}, {L"sum", L"\x03a3"}, {L"prod", L"\x03a0"},
+        {L"int", L"\x222b"}, {L"iint", L"\x222c"}, {L"iiint", L"\x222d"},
+        {L"oint", L"\x222e"}, {L"in", L"\x2208"}, {L"notin", L"\x2209"},
+        {L"subset", L"\x2282"}, {L"supset", L"\x2283"}, {L"subseteq", L"\x2286"},
+        {L"supseteq", L"\x2287"}, {L"cup", L"\x222a"}, {L"cap", L"\x2229"},
+        {L"forall", L"\x2200"}, {L"exists", L"\x2203"}, {L"therefore", L"\x2234"},
+        {L"angle", L"\x2220"}, {L"perp", L"\x22a5"}, {L"parallel", L"\x2225"},
+        {L"prime", L"\x2032"}, {L"ldots", L"\x2026"}, {L"dots", L"\x2026"},
+        {L"ell", L"\x2113"}, {L"hbar", L"\x210f"}, {L"micro", L"\x00b5"},
+        {L"percent", L"%"}, {L"dagger", L"\x2020"}, {L"ddagger", L"\x2021"},
+        {L"section", L"\x00a7"}, {L"paragraph", L"\x00b6"},
+        {L"copyright", L"\x00a9"}, {L"registered", L"\x00ae"},
+        {L"trademark", L"\x2122"}, {L"checkmark", L"\x2713"},
+        {L"rightarrowtail", L"\x21a3"}, {L"longrightarrow", L"\x27f6"},
+        {L"longleftarrow", L"\x27f5"},
+    };
+    for (const Entry& entry : kSymbols) {
+        if (name == entry.name) {
+            return entry.value;
+        }
+    }
+    return nullptr;
+}
+
+std::wstring LatexCommandToText(const std::wstring& s, size_t& i) {
+    i++;  // Skip the backslash.
+    if (i >= s.size()) {
+        return L"\\";
+    }
+    if (!iswalpha(s[i])) {
+        const wchar_t c = s[i++];
+        switch (c) {
+            case L'\\': return L"\n";
+            case L',':
+            case L';':
+            case L':':
+            case L' ':
+                return L" ";
+            case L'!': return L"";
+            case L'&':
+            case L'%':
+            case L'$':
+            case L'#':
+            case L'_':
+            case L'{':
+            case L'}':
+                return std::wstring(1, c);
+            default: return std::wstring(1, c);
+        }
+    }
+    const size_t nameStart = i;
+    while (i < s.size() && iswalpha(s[i])) {
+        i++;
+    }
+    const std::wstring name = s.substr(nameStart, i - nameStart);
+    while (i < s.size() && iswspace(s[i])) {
+        i++;
+    }
+
+    std::wstring first;
+    std::wstring second;
+    if (name == L"text" || name == L"textrm" || name == L"textnormal" ||
+        name == L"mathrm" || name == L"mathbf" || name == L"mathit" ||
+        name == L"mathsf" || name == L"mathtt" || name == L"mathbb" ||
+        name == L"mathcal" || name == L"operatorname" || name == L"mbox" ||
+        name == L"textbf" || name == L"textit" || name == L"emph" ||
+        name == L"boxed" || name == L"ce" || name == L"pu") {
+        if (ReadLatexGroup(s, i, first)) {
+            return LatexToText(first);
+        }
+        return {};
+    }
+    if (name == L"frac" || name == L"dfrac" || name == L"tfrac") {
+        if (!ReadLatexGroup(s, i, first)) {
+            return {};
+        }
+        if (!ReadLatexGroup(s, i, second)) {
+            return LatexToText(first);
+        }
+        const std::wstring numerator = LatexToText(first);
+        const std::wstring denominator = LatexToText(second);
+        if (numerator.find_first_of(L" +-=<>") != std::wstring::npos) {
+            return L"(" + numerator + L")/(" + denominator + L")";
+        }
+        return numerator + L"/" + denominator;
+    }
+    if (name == L"sqrt") {
+        std::wstring root = L"\x221a";
+        if (i < s.size() && s[i] == L'[') {
+            const size_t close = s.find(L']', i + 1);
+            if (close != std::wstring::npos) {
+                const std::wstring index = Trim(s.substr(i + 1, close - i - 1));
+                if (index == L"3") {
+                    root = L"\x221b";
+                } else if (index == L"4") {
+                    root = L"\x221c";
+                }
+                i = close + 1;
+            }
+        }
+        if (!ReadLatexGroup(s, i, first)) {
+            return root;
+        }
+        const std::wstring value = LatexToText(first);
+        if (value.size() <= 1) {
+            return root + value;
+        }
+        return root + L"(" + value + L")";
+    }
+    if (name == L"left" || name == L"right" || name == L"middle") {
+        if (i >= s.size()) {
+            return {};
+        }
+        if (s[i] == L'.') {
+            i++;
+            return {};
+        }
+        if (s[i] == L'\\') {
+            return LatexCommandToText(s, i);
+        }
+        return std::wstring(1, s[i++]);
+    }
+    if (name == L"color") {
+        ReadLatexGroup(s, i, first);
+        return {};
+    }
+    if (name == L"textcolor") {
+        if (!ReadLatexGroup(s, i, first)) {
+            return {};
+        }
+        if (!ReadLatexGroup(s, i, second)) {
+            return {};
+        }
+        return LatexToText(second);
+    }
+    if (name == L"begin" || name == L"end") {
+        ReadLatexGroup(s, i, first);
+        return {};
+    }
+    if (name == L"overline" || name == L"underline" || name == L"hat" ||
+        name == L"bar" || name == L"vec" || name == L"dot" || name == L"ddot" ||
+        name == L"tilde" || name == L"widehat" || name == L"widetilde" ||
+        name == L"overrightarrow" || name == L"overleftarrow") {
+        if (!ReadLatexGroup(s, i, first)) {
+            return {};
+        }
+        std::wstring value = LatexToText(first);
+        if (name == L"overline" || name == L"bar") {
+            value += L"\x0304";
+        } else if (name == L"underline") {
+            value += L"\x0332";
+        } else if (name == L"hat" || name == L"widehat") {
+            value += L"\x0302";
+        } else if (name == L"tilde" || name == L"widetilde") {
+            value += L"\x0303";
+        } else if (name == L"vec") {
+            value += L"\x20d7";
+        } else if (name == L"dot") {
+            value += L"\x0307";
+        } else if (name == L"ddot") {
+            value += L"\x0308";
+        } else if (name == L"overrightarrow") {
+            value += L"\x20d7";
+        } else if (name == L"overleftarrow") {
+            value += L"\x20d6";
+        }
+        return value;
+    }
+    if (name == L"quad") {
+        return L"  ";
+    }
+    if (name == L"qquad") {
+        return L"    ";
+    }
+    if (name == L"displaystyle" || name == L"textstyle" || name == L"scriptstyle" ||
+        name == L"scriptscriptstyle" || name == L"limits" || name == L"nolimits" ||
+        name == L"nonumber" || name == L"notag") {
+        return {};
+    }
+    if (const wchar_t* symbol = LatexSymbol(name)) {
+        return symbol;
+    }
+    if (ReadLatexGroup(s, i, first)) {
+        return LatexToText(first);
+    }
+    return name;
+}
+
+std::wstring LatexToText(const std::wstring& s) {
+    std::wstring out;
+    out.reserve(s.size());
+    for (size_t i = 0; i < s.size();) {
+        const wchar_t c = s[i];
+        if (c == L'\\') {
+            out += LatexCommandToText(s, i);
+        } else if (c == L'_' || c == L'^') {
+            const bool sub = c == L'_';
+            i++;
+            out += MapScript(LatexToText(ReadLatexToken(s, i)), sub);
+        } else if (c == L'{') {
+            std::wstring group;
+            ReadLatexGroup(s, i, group);
+            out += LatexToText(group);
+        } else if (c == L'}') {
+            i++;
+        } else if (c == L'&') {
+            out += L' ';
+            i++;
+        } else if (c == L'~') {
+            out += L' ';
+            i++;
+        } else if (c == L'%') {
+            while (i < s.size() && s[i] != L'\n') {
+                i++;
+            }
+        } else if (c == L'$') {
+            i++;
+        } else {
+            out += c;
+            i++;
+        }
+    }
+    return out;
+}
+
+void AppendCodePoint(std::wstring& out, uint32_t cp) {
+    if (cp <= 0xFFFF) {
+        out += static_cast<wchar_t>(cp);
+    } else if (cp <= 0x10FFFF) {
+        cp -= 0x10000;
+        out += static_cast<wchar_t>(0xD800 + (cp >> 10));
+        out += static_cast<wchar_t>(0xDC00 + (cp & 0x3FF));
+    }
+}
+
+bool DecodeEntityAt(const std::wstring& s, size_t& i, std::wstring& out) {
+    const size_t semi = s.find(L';', i + 1);
+    if (semi == std::wstring::npos || semi - i > 12) {
+        return false;
+    }
+    const std::wstring body = s.substr(i + 1, semi - i - 1);
+    if (body.empty()) {
+        return false;
+    }
+    if (body[0] == L'#') {
+        size_t p = 1;
+        int base = 10;
+        if (p < body.size() && (body[p] == L'x' || body[p] == L'X')) {
+            base = 16;
+            p++;
+        }
+        uint32_t value = 0;
+        bool any = false;
+        for (; p < body.size(); p++) {
+            const wchar_t c = body[p];
+            int digit = -1;
+            if (c >= L'0' && c <= L'9') {
+                digit = c - L'0';
+            } else if (base == 16 && c >= L'a' && c <= L'f') {
+                digit = 10 + c - L'a';
+            } else if (base == 16 && c >= L'A' && c <= L'F') {
+                digit = 10 + c - L'A';
+            }
+            if (digit < 0) {
+                return false;
+            }
+            value = value * base + digit;
+            any = true;
+        }
+        if (!any) {
+            return false;
+        }
+        AppendCodePoint(out, value);
+        i = semi + 1;
+        return true;
+    }
+    struct Entry {
+        const wchar_t* name;
+        const wchar_t* value;
+    };
+    static const Entry kEntities[] = {
+        {L"amp", L"&"}, {L"lt", L"<"}, {L"gt", L">"}, {L"quot", L"\""},
+        {L"apos", L"'"},
+        {L"nbsp", L"\x00a0"}, {L"copy", L"\x00a9"}, {L"reg", L"\x00ae"},
+        {L"trade", L"\x2122"}, {L"hellip", L"\x2026"}, {L"mdash", L"\x2014"},
+        {L"ndash", L"\x2013"}, {L"deg", L"\x00b0"}, {L"plusmn", L"\x00b1"},
+        {L"times", L"\x00d7"}, {L"divide", L"\x00f7"}, {L"le", L"\x2264"},
+        {L"ge", L"\x2265"}, {L"ne", L"\x2260"}, {L"rarr", L"\x2192"},
+        {L"larr", L"\x2190"}, {L"harr", L"\x2194"}, {L"infin", L"\x221e"},
+    };
+    const std::wstring name = Lowercase(body);
+    for (const Entry& entry : kEntities) {
+        if (name == entry.name) {
+            out += entry.value;
+            i = semi + 1;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool TryMathSpan(const std::wstring& s, size_t& i, std::wstring& out) {
+    if (s.compare(i, 2, L"$$") == 0) {
+        const size_t close = s.find(L"$$", i + 2);
+        if (close == std::wstring::npos) {
+            return false;
+        }
+        out += LatexToText(s.substr(i + 2, close - i - 2));
+        i = close + 2;
+        return true;
+    }
+    if (s.compare(i, 2, L"\\(") == 0) {
+        const size_t close = s.find(L"\\)", i + 2);
+        if (close == std::wstring::npos) {
+            return false;
+        }
+        out += LatexToText(s.substr(i + 2, close - i - 2));
+        i = close + 2;
+        return true;
+    }
+    if (s.compare(i, 2, L"\\[") == 0) {
+        const size_t close = s.find(L"\\]", i + 2);
+        if (close == std::wstring::npos) {
+            return false;
+        }
+        out += LatexToText(s.substr(i + 2, close - i - 2));
+        i = close + 2;
+        return true;
+    }
+    if (s[i] != L'$' || i + 1 >= s.size() || iswspace(s[i + 1])) {
+        return false;
+    }
+    for (size_t j = i + 1; j < s.size(); j++) {
+        if (s[j] == L'\\') {
+            j++;
             continue;
         }
-        if (c == L'`') {
+        if (s[j] == L'$') {
+            if (j == i + 1 || iswspace(s[j - 1])) {
+                return false;
+            }
+            if (j + 1 < s.size() && iswdigit(s[j + 1])) {
+                return false;
+            }
+            out += LatexToText(s.substr(i + 1, j - i - 1));
+            i = j + 1;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool IsHorizontalRule(const std::wstring& line) {
+    wchar_t marker = 0;
+    int count = 0;
+    for (wchar_t c : line) {
+        if (c == L' ' || c == L'\t') {
             continue;
         }
-        if (c == L']' && i + 1 < line.size() && line[i + 1] == L'(') {
-            const size_t close = line.find(L')', i + 2);
-            const size_t open = out.rfind(L'[');
-            if (close != std::wstring::npos && open != std::wstring::npos) {
-                out.erase(open, 1);
-                i = close;
+        if (c != L'-' && c != L'*' && c != L'_') {
+            return false;
+        }
+        if (marker == 0) {
+            marker = c;
+        } else if (c != marker) {
+            return false;
+        }
+        count++;
+    }
+    return count >= 3;
+}
+
+size_t FenceRun(const std::wstring& line) {
+    if (line.empty() || (line[0] != L'`' && line[0] != L'~')) {
+        return 0;
+    }
+    size_t count = 0;
+    while (count < line.size() && line[count] == line[0]) {
+        count++;
+    }
+    return count;
+}
+
+void ParseInlineRunsImpl(const std::wstring& s,
+                         std::vector<TextRun>& runs,
+                         uint8_t style,
+                         int depth) {
+    if (depth > 8) {
+        AppendRun(runs, s, style);
+        return;
+    }
+    std::wstring plain;
+    auto flushPlain = [&] {
+        AppendRun(runs, plain, style);
+        plain.clear();
+    };
+    for (size_t i = 0; i < s.size();) {
+        const wchar_t c = s[i];
+
+        if (c == L'$' || (c == L'\\' && i + 1 < s.size() &&
+                          (s[i + 1] == L'(' || s[i + 1] == L'['))) {
+            std::wstring math;
+            if (TryMathSpan(s, i, math)) {
+                flushPlain();
+                AppendRun(runs, math, style);
                 continue;
             }
         }
-        out += c;
+
+        if (c == L'\\') {
+            if (i + 1 < s.size()) {
+                const wchar_t next = s[i + 1];
+                if (next == L'*' || next == L'_' || next == L'`' || next == L'$' ||
+                    next == L'[' || next == L']' || next == L'(' || next == L')' ||
+                    next == L'{' || next == L'}' || next == L'#' || next == L'+' ||
+                    next == L'-' || next == L'.' || next == L'!' || next == L'|' ||
+                    next == L'>' || next == L'\\') {
+                    plain += next;
+                    i += 2;
+                    continue;
+                }
+            }
+            plain += c;
+            i++;
+            continue;
+        }
+
+        if (c == L'`') {
+            size_t count = 1;
+            while (i + count < s.size() && s[i + count] == L'`') {
+                count++;
+            }
+            const std::wstring fence(count, L'`');
+            const size_t close = s.find(fence, i + count);
+            if (close != std::wstring::npos && close > i + count) {
+                flushPlain();
+                std::wstring code = s.substr(i + count, close - i - count);
+                for (wchar_t& ch : code) {
+                    if (ch == L'\n' || ch == L'\r') {
+                        ch = L' ';
+                    }
+                }
+                if (code.size() >= 2 && code.front() == L' ' && code.back() == L' ' &&
+                    code.find_first_not_of(L' ') != std::wstring::npos) {
+                    code = code.substr(1, code.size() - 2);
+                }
+                AppendRun(runs, code, static_cast<uint8_t>(style | kRunCode));
+                i = close + count;
+                continue;
+            }
+        }
+
+        if (c == L'*' || c == L'_') {
+            size_t count = 1;
+            while (i + count < s.size() && s[i + count] == c) {
+                count++;
+            }
+            if (c == L'_' && i > 0 && (iswalnum(s[i - 1]) || s[i - 1] == L'_')) {
+                plain += std::wstring(count, c);
+                i += count;
+                continue;
+            }
+            const std::wstring delimiter(count, c);
+            const size_t close = s.find(delimiter, i + count);
+            const bool validClose =
+                close != std::wstring::npos && close > i + count &&
+                !iswspace(s[close - 1]) &&
+                (c != L'_' || close + count >= s.size() ||
+                 !iswalnum(s[close + count]));
+            if (validClose) {
+                flushPlain();
+                uint8_t inner = style;
+                if (count >= 2) {
+                    inner |= kRunBold;
+                }
+                if (count == 1 || count >= 3) {
+                    inner |= kRunItalic;
+                }
+                ParseInlineRunsImpl(s.substr(i + count, close - i - count), runs,
+                                    inner, depth + 1);
+                i = close + count;
+                continue;
+            }
+        }
+
+        if (c == L'~' && i + 1 < s.size() && s[i + 1] == L'~') {
+            const size_t close = s.find(L"~~", i + 2);
+            if (close != std::wstring::npos && close > i + 2) {
+                flushPlain();
+                ParseInlineRunsImpl(s.substr(i + 2, close - i - 2), runs, style,
+                                    depth + 1);
+                i = close + 2;
+                continue;
+            }
+        }
+
+        if (c == L'[' || (c == L'!' && i + 1 < s.size() && s[i + 1] == L'[')) {
+            const size_t labelStart = c == L'!' ? i + 2 : i + 1;
+            const size_t labelEnd = s.find(L']', labelStart);
+            if (labelEnd != std::wstring::npos && labelEnd + 1 < s.size() &&
+                s[labelEnd + 1] == L'(') {
+                int parens = 1;
+                size_t close = labelEnd + 2;
+                for (; close < s.size(); close++) {
+                    if (s[close] == L'(') {
+                        parens++;
+                    } else if (s[close] == L')') {
+                        parens--;
+                        if (parens == 0) {
+                            break;
+                        }
+                    }
+                }
+                if (close < s.size()) {
+                    flushPlain();
+                    ParseInlineRunsImpl(
+                        s.substr(labelStart, labelEnd - labelStart), runs, style,
+                        depth + 1);
+                    i = close + 1;
+                    continue;
+                }
+            }
+        }
+
+        if (c == L'&') {
+            std::wstring decoded;
+            if (DecodeEntityAt(s, i, decoded)) {
+                plain += decoded;
+                continue;
+            }
+        }
+
+        if (c == L'<') {
+            const size_t close = s.find(L'>', i + 1);
+            if (close != std::wstring::npos && close - i <= 64) {
+                const std::wstring tag =
+                    Lowercase(s.substr(i + 1, close - i - 1));
+                if (tag.rfind(L"br", 0) == 0) {
+                    plain += L'\n';
+                    i = close + 1;
+                    continue;
+                }
+                if (tag.rfind(L"http://", 0) == 0 ||
+                    tag.rfind(L"https://", 0) == 0) {
+                    plain += s.substr(i + 1, close - i - 1);
+                    i = close + 1;
+                    continue;
+                }
+                if (!tag.empty() &&
+                    (tag[0] == L'/' || tag[0] == L'!' || iswalpha(tag[0]))) {
+                    i = close + 1;
+                    continue;
+                }
+            }
+        }
+
+        plain += c;
+        i++;
     }
-    return out;
+    flushPlain();
+}
+
+void ParseInlineRuns(const std::wstring& text, std::vector<TextRun>& runs) {
+    ParseInlineRunsImpl(text, runs, 0, 0);
 }
 
 std::vector<TextBlock> ParseMarkdown(const std::wstring& text) {
     std::vector<TextBlock> blocks;
     bool inCode = false;
+    bool inMath = false;
+    wchar_t fenceChar = 0;
+    size_t fenceLength = 0;
     std::wstring code;
+    std::wstring math;
+    std::wstring mathClose;
+    TextBlock pending;
+    bool hasPending = false;
+
+    auto flushPending = [&] {
+        if (!hasPending) {
+            return;
+        }
+        std::vector<TextRun> runs;
+        ParseInlineRuns(pending.text, runs);
+        pending.text = RunsText(runs);
+        pending.runs = std::move(runs);
+        if (!pending.text.empty()) {
+            blocks.push_back(std::move(pending));
+        }
+        pending = TextBlock{};
+        hasPending = false;
+    };
+
+    auto pushInline = [&](TextBlock::Kind kind, const std::wstring& text,
+                          const std::wstring& bullet, int indent) {
+        flushPending();
+        if (text.empty()) {
+            return;
+        }
+        TextBlock block;
+        block.kind = kind;
+        block.text = text;
+        block.bullet = bullet;
+        block.indent = indent;
+        ParseInlineRuns(block.text, block.runs);
+        block.text = RunsText(block.runs);
+        if (!block.text.empty()) {
+            blocks.push_back(std::move(block));
+        }
+    };
+
+    auto pushCode = [&] {
+        if (!code.empty() && code.back() == L'\n') {
+            code.pop_back();
+        }
+        if (!code.empty()) {
+            TextBlock block;
+            block.kind = TextBlock::Kind::Code;
+            block.text = code;
+            block.runs.push_back({code, 0});
+            blocks.push_back(std::move(block));
+        }
+        code.clear();
+    };
+
+    auto pushMath = [&] {
+        std::wstring value = LatexToText(math);
+        if (!value.empty()) {
+            TextBlock block;
+            block.kind = TextBlock::Kind::Math;
+            block.text = value;
+            block.runs.push_back({value, 0});
+            blocks.push_back(std::move(block));
+        }
+        math.clear();
+    };
+
     size_t start = 0;
     for (;;) {
         size_t end = text.find(L'\n', start);
@@ -12066,62 +12920,211 @@ std::vector<TextBlock> ParseMarkdown(const std::wstring& text) {
         }
         const std::wstring trimmed = Trim(line);
 
-        if (trimmed.rfind(L"```", 0) == 0) {
-            if (inCode) {
-                if (!code.empty() && code.back() == L'\n') {
-                    code.pop_back();
-                }
-                blocks.push_back({TextBlock::Kind::Code, L"", code});
-                code.clear();
+        if (inCode) {
+            const size_t run = FenceRun(trimmed);
+            if (run >= fenceLength && trimmed[0] == fenceChar &&
+                Trim(trimmed.substr(run)).empty()) {
+                pushCode();
+                inCode = false;
+            } else {
+                code += line + L"\n";
             }
-            inCode = !inCode;
-        } else if (inCode) {
-            code += line + L"\n";
-        } else if (trimmed.empty()) {
-            // Blank lines only separate blocks.
-        } else if (trimmed[0] == L'#') {
+            if (last) {
+                break;
+            }
+            continue;
+        }
+
+        if (inMath) {
+            const size_t close = line.find(mathClose);
+            if (close != std::wstring::npos) {
+                math += line.substr(0, close);
+                pushMath();
+                inMath = false;
+            } else {
+                math += line + L"\n";
+            }
+            if (last) {
+                break;
+            }
+            continue;
+        }
+
+        if (trimmed.empty()) {
+            flushPending();
+            if (last) {
+                break;
+            }
+            continue;
+        }
+
+        const size_t fence = FenceRun(trimmed);
+        if (fence >= 3) {
+            flushPending();
+            inCode = true;
+            fenceChar = trimmed[0];
+            fenceLength = fence;
+            code.clear();
+            if (last) {
+                break;
+            }
+            continue;
+        }
+
+        if (trimmed.size() >= 2 && trimmed.compare(0, 2, L"$$") == 0 &&
+            trimmed.find(L"$$", 2) == std::wstring::npos) {
+            flushPending();
+            inMath = true;
+            mathClose = L"$$";
+            math = trimmed.substr(2);
+            if (!math.empty()) {
+                math += L"\n";
+            }
+            if (last) {
+                break;
+            }
+            continue;
+        }
+        if (trimmed.size() >= 2 && trimmed.compare(0, 2, L"\\[") == 0 &&
+            trimmed.find(L"\\]", 2) == std::wstring::npos) {
+            flushPending();
+            inMath = true;
+            mathClose = L"\\]";
+            math = trimmed.substr(2);
+            if (!math.empty()) {
+                math += L"\n";
+            }
+            if (last) {
+                break;
+            }
+            continue;
+        }
+
+        if (IsHorizontalRule(trimmed)) {
+            flushPending();
+            TextBlock block;
+            block.kind = TextBlock::Kind::Rule;
+            blocks.push_back(std::move(block));
+            if (last) {
+                break;
+            }
+            continue;
+        }
+
+        if (trimmed[0] == L'#') {
             size_t level = 0;
             while (level < trimmed.size() && trimmed[level] == L'#') {
                 level++;
             }
-            blocks.push_back({TextBlock::Kind::Heading, L"",
-                              StripInlineMarkdown(Trim(trimmed.substr(level)))});
-        } else if (trimmed.size() > 2 &&
-                   (trimmed[0] == L'-' || trimmed[0] == L'*' ||
-                    trimmed[0] == L'\x2022') &&
-                   trimmed[1] == L' ') {
-            blocks.push_back({TextBlock::Kind::Bullet, L"\x2022",
-                              StripInlineMarkdown(Trim(trimmed.substr(2)))});
+            if (level <= 6) {
+                pushInline(TextBlock::Kind::Heading, Trim(trimmed.substr(level)),
+                           L"", 0);
+                if (last) {
+                    break;
+                }
+                continue;
+            }
+        }
+
+        int column = 0;
+        size_t bodyStart = 0;
+        while (bodyStart < line.size() &&
+               (line[bodyStart] == L' ' || line[bodyStart] == L'\t')) {
+            column += line[bodyStart] == L'\t' ? 4 : 1;
+            bodyStart++;
+        }
+        const std::wstring body = line.substr(bodyStart);
+
+        int quoteDepth = 0;
+        size_t quotePos = bodyStart;
+        while (quotePos < line.size()) {
+            while (quotePos < line.size() &&
+                   (line[quotePos] == L' ' || line[quotePos] == L'\t')) {
+                quotePos++;
+            }
+            if (quotePos < line.size() && line[quotePos] == L'>') {
+                quoteDepth++;
+                quotePos++;
+                if (quotePos < line.size() && line[quotePos] == L' ') {
+                    quotePos++;
+                }
+            } else {
+                break;
+            }
+        }
+        if (quoteDepth > 0) {
+            const std::wstring quoteText = Trim(line.substr(quotePos));
+            if (!quoteText.empty()) {
+                if (hasPending && pending.kind == TextBlock::Kind::Quote &&
+                    pending.indent == quoteDepth) {
+                    pending.text += L"\n" + quoteText;
+                } else {
+                    flushPending();
+                    pending.kind = TextBlock::Kind::Quote;
+                    pending.indent = quoteDepth;
+                    pending.text = quoteText;
+                    hasPending = true;
+                }
+            }
+            if (last) {
+                break;
+            }
+            continue;
+        }
+
+        std::wstring bullet;
+        std::wstring rest;
+        bool isBullet = false;
+        if (body.size() >= 2 &&
+            (body[0] == L'-' || body[0] == L'*' || body[0] == L'+' ||
+             body[0] == L'\x2022') &&
+            (body[1] == L' ' || body[1] == L'\t')) {
+            bullet = L"\x2022";
+            rest = Trim(body.substr(1));
+            isBullet = true;
         } else {
             size_t digits = 0;
-            while (digits < trimmed.size() && iswdigit(trimmed[digits])) {
+            while (digits < body.size() && iswdigit(body[digits])) {
                 digits++;
             }
-            if (digits > 0 && digits < 4 && digits + 1 < trimmed.size() &&
-                (trimmed[digits] == L'.' || trimmed[digits] == L')') &&
-                trimmed[digits + 1] == L' ') {
-                blocks.push_back(
-                    {TextBlock::Kind::Bullet, trimmed.substr(0, digits + 1),
-                     StripInlineMarkdown(Trim(trimmed.substr(digits + 2)))});
-            } else {
-                std::wstring paragraph = trimmed;
-                if (paragraph.rfind(L"> ", 0) == 0) {
-                    paragraph.erase(0, 2);
-                }
-                blocks.push_back({TextBlock::Kind::Paragraph, L"",
-                                  StripInlineMarkdown(paragraph)});
+            if (digits > 0 && digits < 10 && digits + 1 < body.size() &&
+                (body[digits] == L'.' || body[digits] == L')') &&
+                (body[digits + 1] == L' ' || body[digits + 1] == L'\t')) {
+                bullet = body.substr(0, digits + 1);
+                rest = Trim(body.substr(digits + 1));
+                isBullet = true;
             }
+        }
+        if (isBullet) {
+            pushInline(TextBlock::Kind::Bullet, rest, bullet,
+                       std::min(column / 2, 4));
+            if (last) {
+                break;
+            }
+            continue;
+        }
+
+        const std::wstring paragraph = Trim(body);
+        if (hasPending && pending.kind == TextBlock::Kind::Paragraph) {
+            pending.text += L"\n" + paragraph;
+        } else {
+            flushPending();
+            pending.kind = TextBlock::Kind::Paragraph;
+            pending.text = paragraph;
+            hasPending = true;
         }
         if (last) {
             break;
         }
     }
-    if (inCode && !code.empty()) {
-        if (code.back() == L'\n') {
-            code.pop_back();
-        }
-        blocks.push_back({TextBlock::Kind::Code, L"", code});
+
+    if (inCode) {
+        pushCode();
     }
+    if (inMath) {
+        pushMath();
+    }
+    flushPending();
     return blocks;
 }
 
@@ -12487,8 +13490,26 @@ class AskCard {
         bool operator==(const PanelKey&) const = default;
     };
 
+    struct ConvoRun {
+        size_t start = 0;
+        size_t length = 0;
+        int x = 0;
+        int width = 0;
+        HFONT font = nullptr;
+        Color color{};
+        bool code = false;
+    };
+
+    struct ConvoLine {
+        size_t start = 0;
+        size_t length = 0;
+        int height = 0;
+        std::vector<int> extents;
+        std::vector<ConvoRun> runs;
+    };
+
     struct ConvoItem {
-        enum class Kind { UserBubble, Text, Thinking, CopyButton, Sparkle };
+        enum class Kind { UserBubble, Text, Thinking, CopyButton, Sparkle, Rule };
         Kind kind;
         RECT rect;  // In conversation coordinates.
         RECT textRect;
@@ -12498,6 +13519,8 @@ class AskCard {
         Color color;
         int turn;
         bool code;
+        std::vector<ConvoLine> lines;
+        bool quote = false;
     };
 
     struct AnswerLine {
@@ -12508,17 +13531,41 @@ class AskCard {
         HFONT font;
         Color color;
         int turn;
+        std::vector<ConvoRun> runs;
     };
 
     float S(float v) const { return v * scale_; }
     int SI(float v) const { return static_cast<int>(lroundf(v * scale_)); }
 
     HFONT BodyFont() { return g_fonts.Get(SI(14), FW_NORMAL); }
+    HFONT BodyBoldFont() { return g_fonts.Get(SI(14), FW_BOLD); }
+    HFONT BodyItalicFont() { return g_fonts.Get(SI(14), FW_NORMAL, false, true); }
+    HFONT BodyBoldItalicFont() {
+        return g_fonts.Get(SI(14), FW_BOLD, false, true);
+    }
     HFONT HeadingFont() { return g_fonts.Get(SI(15), FW_SEMIBOLD); }
+    HFONT HeadingItalicFont() {
+        return g_fonts.Get(SI(15), FW_SEMIBOLD, false, true);
+    }
     HFONT SmallFont() { return g_fonts.Get(SI(12), FW_NORMAL); }
     HFONT CodeFont() { return g_fonts.Get(SI(13), FW_NORMAL, true); }
     HFONT InputFont() { return g_fonts.Get(SI(14), FW_NORMAL); }
     HFONT ChipFont() { return g_fonts.Get(SI(14), FW_NORMAL); }
+
+    HFONT RunFont(uint8_t style, bool heading, bool codeBlock) {
+        if (codeBlock || (style & kRunCode)) {
+            return CodeFont();
+        }
+        const bool bold = (style & kRunBold) != 0;
+        const bool italic = (style & kRunItalic) != 0;
+        if (heading) {
+            return italic ? HeadingItalicFont() : HeadingFont();
+        }
+        if (bold) {
+            return italic ? BodyBoldItalicFont() : BodyBoldFont();
+        }
+        return italic ? BodyItalicFont() : BodyFont();
+    }
 
     void Restyle() {
         palette_ = MakePalette(UseDarkTheme());
@@ -13199,10 +14246,162 @@ class AskCard {
     ////////////////////////////////////////////////////////////////////////
     // Layout
 
+    std::vector<ConvoLine> WrapRuns(const std::vector<TextRun>& runs,
+                                    HFONT baseFont,
+                                    bool heading,
+                                    bool codeBlock,
+                                    int maxWidth) {
+        struct Cell {
+            HFONT font;
+            bool code;
+            int advance;
+        };
+        std::vector<Cell> cells;
+        std::wstring plain;
+        maxWidth = std::max(1, maxWidth);
+
+        for (const TextRun& run : runs) {
+            HFONT font = RunFont(run.style, heading, codeBlock);
+            const bool code = codeBlock || (run.style & kRunCode) != 0;
+            size_t pos = 0;
+            for (;;) {
+                const size_t newline = run.text.find(L'\n', pos);
+                const size_t end = newline == std::wstring::npos
+                                       ? run.text.size()
+                                       : newline;
+                if (end > pos) {
+                    const std::wstring chunk = run.text.substr(pos, end - pos);
+                    std::vector<int> extents;
+                    text_.Extents(font, chunk, extents);
+                    int previous = 0;
+                    for (size_t k = 0; k < chunk.size(); k++) {
+                        const int total =
+                            k < extents.size() ? extents[k] : previous;
+                        cells.push_back({font, code, std::max(0, total - previous)});
+                        previous = total;
+                    }
+                    plain += chunk;
+                }
+                if (newline == std::wstring::npos) {
+                    break;
+                }
+                cells.push_back({font, code, 0});
+                plain += L'\n';
+                pos = newline + 1;
+            }
+        }
+        if (plain.empty()) {
+            return {};
+        }
+
+        std::vector<std::pair<HFONT, int>> heightCache;
+        auto fontHeight = [&](HFONT font) {
+            for (const auto& entry : heightCache) {
+                if (entry.first == font) {
+                    return entry.second;
+                }
+            }
+            const int height = text_.Measure(font, L"Mg", 1, DT_SINGLELINE).cy;
+            heightCache.push_back({font, height});
+            return height;
+        };
+        const int baseHeight = fontHeight(baseFont);
+        std::vector<ConvoLine> lines;
+        const size_t count = plain.size();
+        size_t i = 0;
+        while (i < count) {
+            if (plain[i] == L'\n') {
+                ConvoLine empty;
+                empty.start = i;
+                empty.length = 0;
+                empty.height = baseHeight;
+                lines.push_back(std::move(empty));
+                i++;
+                continue;
+            }
+
+            size_t end = i;
+            int width = 0;
+            size_t lastSpace = std::wstring::npos;
+            while (end < count && plain[end] != L'\n') {
+                const int advance = cells[end].advance;
+                if (end > i && width + advance > maxWidth) {
+                    break;
+                }
+                width += advance;
+                if (iswspace(plain[end])) {
+                    lastSpace = end;
+                }
+                end++;
+            }
+            if (end < count && plain[end] != L'\n' && lastSpace != std::wstring::npos &&
+                lastSpace >= i) {
+                end = lastSpace + 1;
+            }
+            if (end > i && end < count && IS_HIGH_SURROGATE(plain[end - 1]) &&
+                IS_LOW_SURROGATE(plain[end])) {
+                end--;
+            }
+            if (end == i) {
+                end = i + (IS_HIGH_SURROGATE(plain[i]) && i + 1 < count &&
+                                   IS_LOW_SURROGATE(plain[i + 1])
+                               ? 2
+                               : 1);
+            }
+
+            ConvoLine line;
+            line.start = i;
+            line.length = end - i;
+            line.height = baseHeight;
+            int x = 0;
+            for (size_t k = i; k < end; k++) {
+                x += cells[k].advance;
+                line.extents.push_back(x);
+                line.height = std::max(line.height, fontHeight(cells[k].font));
+            }
+
+            size_t segmentStart = i;
+            for (size_t k = i + 1; k <= end; k++) {
+                const bool split =
+                    k == end || cells[k].font != cells[segmentStart].font ||
+                    cells[k].code != cells[segmentStart].code;
+                if (!split) {
+                    continue;
+                }
+                ConvoRun run;
+                run.start = segmentStart;
+                run.length = k - segmentStart;
+                run.x = segmentStart == i ? 0 : line.extents[segmentStart - i - 1];
+                run.width = line.extents[k - i - 1] - run.x;
+                run.font = cells[segmentStart].font;
+                run.color = palette_.text;
+                run.code = cells[segmentStart].code;
+                line.runs.push_back(std::move(run));
+                segmentStart = k;
+            }
+
+            lines.push_back(std::move(line));
+            if (end < count && plain[end] == L'\n') {
+                i = end + 1;
+            } else {
+                i = end;
+            }
+        }
+        return lines;
+    }
+
     void LayoutConversation() {
         convoItems_.clear();
         const int width = convoWidth_;
         const int textLeft = SI(26);
+        auto measureLines = [&](const std::vector<ConvoLine>& lines, HFONT font) {
+            int height = 0;
+            for (const ConvoLine& line : lines) {
+                height += line.height;
+            }
+            return height > 0 ? height
+                             : text_.Measure(font, L"Mg", 1, DT_SINGLELINE).cy;
+        };
         int y = 0;
         for (size_t t = 0; t < turns_.size(); t++) {
             const CardTurn& turn = turns_[t];
@@ -13239,19 +14438,32 @@ class AskCard {
             }
             if (turn.error && turn.errorText.empty()) {
                 HFONT font = BodyFont();
-                const auto lines = text_.Wrap(font, turn.text, width - textLeft);
-                const SIZE size{width - textLeft, static_cast<LONG>(lines.size()) *
-                    text_.Measure(font, L"Mg", width - textLeft, DT_SINGLELINE).cy};
-                const RECT rc{textLeft, y, width, y + size.cy};
-                convoItems_.push_back({ConvoItem::Kind::Text, rc, rc, turn.text,
-                                       L"", font, palette_.error, turnIndex,
-                                       false});
-                y += size.cy + SI(14);
+                std::vector<TextRun> errorRuns{{turn.text, 0}};
+                auto lines = WrapRuns(errorRuns, font, false, false, width - textLeft);
+                const int height = measureLines(lines, font);
+                const RECT rc{textLeft, y, width, y + height};
+                ConvoItem item{ConvoItem::Kind::Text, rc, rc, turn.text, L"",
+                               font, palette_.error, turnIndex, false};
+                item.lines = std::move(lines);
+                convoItems_.push_back(std::move(item));
+                y += height + SI(14);
                 continue;
             }
 
             bool first = true;
             for (const TextBlock& block : ParseMarkdown(turn.text)) {
+                if (block.kind == TextBlock::Kind::Rule) {
+                    if (!first) {
+                        y += SI(4);
+                    }
+                    first = false;
+                    const RECT rc{textLeft, y + SI(3), width, y + SI(4)};
+                    convoItems_.push_back({ConvoItem::Kind::Rule, rc, {},
+                                           L"", L"", nullptr, palette_.divider,
+                                           turnIndex, false});
+                    y += SI(10);
+                    continue;
+                }
                 if (block.text.empty()) {
                     continue;
                 }
@@ -13260,54 +14472,58 @@ class AskCard {
                 }
                 first = false;
                 const bool code = block.kind == TextBlock::Kind::Code;
-                HFONT font = block.kind == TextBlock::Kind::Heading ? HeadingFont()
-                             : code                                  ? CodeFont()
-                                                                     : BodyFont();
+                const bool heading = block.kind == TextBlock::Kind::Heading;
+                const bool quote = block.kind == TextBlock::Kind::Quote;
+                HFONT font = heading ? HeadingFont() : code ? CodeFont() : BodyFont();
+                const Color color = quote ? palette_.secondary : palette_.text;
                 int left = textLeft;
                 int right = width;
                 if (block.kind == TextBlock::Kind::Bullet) {
                     left += SI(block.bullet.size() > 1 ? 24 : 16);
-                } else if (code) {
+                }
+                if (block.indent > 0) {
+                    left += SI(12) * std::min(block.indent, 4);
+                }
+                if (code) {
                     left += SI(10);
                     right -= SI(10);
                 }
-                std::wstring display;
-                int column = 0;
-                for (wchar_t c : block.text) {
-                    if (c == L'\t') {
-                        const int spaces = 4 - column % 4;
-                        display.append(spaces, L' ');
-                        column += spaces;
-                    } else {
-                        display += c;
-                        column = c == L'\n' ? 0 : column + 1;
-                    }
+
+                std::vector<TextRun> runs = block.runs;
+                if (runs.empty() && !block.text.empty()) {
+                    runs.push_back({block.text, 0});
                 }
-                const auto lines = text_.Wrap(font, display, right - left);
-                const SIZE size{right - left, static_cast<LONG>(lines.size()) *
-                    text_.Measure(font, L"Mg", right - left, DT_SINGLELINE).cy};
+                runs = ExpandTabs(runs);
+                const std::wstring display = RunsText(runs);
+                auto lines = WrapRuns(runs, font, heading, code, right - left);
+                const int height = measureLines(lines, font);
+
                 ConvoItem item{ConvoItem::Kind::Text,
-                               {textLeft, y, width, y + size.cy},
-                               {left, y, right, y + size.cy},
-                               display, block.bullet, font, palette_.text,
-                               turnIndex, code};
+                               {textLeft, y, width, y + height},
+                               {left, y, right, y + height},
+                               display, block.bullet, font, color, turnIndex,
+                               code};
+                item.lines = std::move(lines);
+                item.quote = quote;
                 if (code) {
                     item.rect.bottom += SI(16);
                     OffsetRect(&item.textRect, 0, SI(8));
                     y += SI(16);
                 }
-                convoItems_.push_back(item);
-                y += size.cy;
+                convoItems_.push_back(std::move(item));
+                y += height;
             }
             y += SI(8);
             if (turn.error && !turn.errorText.empty()) {
                 HFONT font = BodyFont();
-                const auto lines = text_.Wrap(font, turn.errorText, width - textLeft);
-                const int height = static_cast<int>(lines.size()) *
-                    text_.Measure(font, L"Mg", width - textLeft, DT_SINGLELINE).cy;
+                std::vector<TextRun> errorRuns{{turn.errorText, 0}};
+                auto lines = WrapRuns(errorRuns, font, false, false, width - textLeft);
+                const int height = measureLines(lines, font);
                 const RECT rc{textLeft, y, width, y + height};
-                convoItems_.push_back({ConvoItem::Kind::Text, rc, rc, turn.errorText,
-                                       L"", font, palette_.error, turnIndex, false});
+                ConvoItem item{ConvoItem::Kind::Text, rc, rc, turn.errorText, L"",
+                               font, palette_.error, turnIndex, false};
+                item.lines = std::move(lines);
+                convoItems_.push_back(std::move(item));
                 y += height + SI(8);
             }
             const std::wstring copyLabel = Tr(Str::Copy);
@@ -13339,18 +14555,75 @@ class AskCard {
             }
             const size_t base = answerText_.size();
             answerText_ += item.text;
-            const int height = text_.Measure(item.font, L"Mg", 1, DT_SINGLELINE).cy;
             int y = item.textRect.top;
-            for (WrappedTextLine& line : text_.Wrap(item.font, item.text,
-                                                   item.textRect.right - item.textRect.left)) {
-                answerLines_.push_back({{item.textRect.left, y, item.textRect.right, y + height},
-                                         base + line.start, line.length, std::move(line.extents),
-                                         item.font, item.color, item.turn});
-                y += height;
+            if (!item.lines.empty()) {
+                for (const ConvoLine& line : item.lines) {
+                    AnswerLine answer;
+                    answer.rect = {item.textRect.left, y, item.textRect.right,
+                                   y + line.height};
+                    answer.start = base + line.start;
+                    answer.length = line.length;
+                    answer.extents = line.extents;
+                    answer.font = item.font;
+                    answer.color = item.color;
+                    answer.turn = item.turn;
+                    for (const ConvoRun& run : line.runs) {
+                        ConvoRun copy = run;
+                        copy.start = base + run.start;
+                        copy.color = item.color;
+                        answer.runs.push_back(std::move(copy));
+                    }
+                    answerLines_.push_back(std::move(answer));
+                    y += line.height;
+                }
+            } else {
+                const int height =
+                    text_.Measure(item.font, L"Mg", 1, DT_SINGLELINE).cy;
+                for (WrappedTextLine& line : text_.Wrap(
+                         item.font, item.text,
+                         item.textRect.right - item.textRect.left)) {
+                    AnswerLine answer;
+                    answer.rect = {item.textRect.left, y, item.textRect.right,
+                                   y + height};
+                    answer.start = base + line.start;
+                    answer.length = line.length;
+                    answer.extents = std::move(line.extents);
+                    answer.font = item.font;
+                    answer.color = item.color;
+                    answer.turn = item.turn;
+                    answerLines_.push_back(std::move(answer));
+                    y += height;
+                }
             }
         }
         answerAnchor_ = std::min(answerAnchor_, answerText_.size());
         answerCaret_ = std::min(answerCaret_, answerText_.size());
+    }
+
+    void DrawAnswerLine(Surface& dst,
+                        const AnswerLine& line,
+                        RECT clip,
+                        POINT offset) {
+        if (line.runs.empty()) {
+            RECT layout = line.rect;
+            OffsetRect(&layout, offset.x, offset.y);
+            text_.Draw(dst, line.font,
+                       answerText_.substr(line.start, line.length), layout, clip,
+                       DT_SINGLELINE | DT_LEFT, line.color);
+            return;
+        }
+        for (const ConvoRun& run : line.runs) {
+            RECT layout = line.rect;
+            OffsetRect(&layout, offset.x, offset.y);
+            layout.left += run.x;
+            layout.right = layout.left + run.width + SI(1);
+            RECT runClip;
+            if (!IntersectRect(&runClip, &clip, &layout)) {
+                continue;
+            }
+            text_.Draw(dst, run.font, answerText_.substr(run.start, run.length),
+                       layout, runClip, DT_SINGLELINE | DT_LEFT, run.color);
+        }
     }
 
     bool ConversationCacheCoversViewport() const {
@@ -13388,6 +14661,11 @@ class AskCard {
                 case ConvoItem::Kind::Text:
                     if (item.code) {
                         FillRoundRect(convo_, l, t, r, b, S(6), palette_.codeBg);
+                    } else if (item.quote) {
+                        const float qx =
+                            static_cast<float>(item.textRect.left - SI(8));
+                        StrokeLine(convo_, Vec2{qx, t}, Vec2{qx, b},
+                                   std::max(2.0f, S(2)), palette_.divider);
                     }
                     if (!item.bullet.empty()) {
                         const RECT bulletRect{item.rect.left, textRect.top,
@@ -13396,18 +14674,20 @@ class AskCard {
                                    DT_LEFT | DT_SINGLELINE, palette_.secondary);
                     }
                     break;
+                case ConvoItem::Kind::Rule:
+                    StrokeLine(convo_, Vec2{l, t}, Vec2{r, t}, S(1),
+                               palette_.divider);
+                    break;
                 default:
                     break;
             }
         }
+        const RECT clip{0, 0, convo_.Width(), convo_.Height()};
         for (const AnswerLine& line : answerLines_) {
             if (line.rect.bottom <= convoCacheTop_ || line.rect.top >= cacheBottom) {
                 continue;
             }
-            RECT rc = line.rect;
-            OffsetRect(&rc, 0, -convoCacheTop_);
-            text_.Draw(convo_, line.font, answerText_.substr(line.start, line.length),
-                       rc, DT_SINGLELINE | DT_LEFT, line.color);
+            DrawAnswerLine(convo_, line, clip, {0, -convoCacheTop_});
         }
         convoDirty_ = false;
     }
@@ -13775,8 +15055,8 @@ class AskCard {
                                   static_cast<float>(clip.top), static_cast<float>(clip.right),
                                   static_cast<float>(clip.bottom), S(2),
                                   WithAlpha(palette_.accent, focused_ ? 0.28f : 0.15f));
-                    text_.Draw(surface_, line.font, answerText_.substr(line.start, line.length),
-                               layout, clip, DT_SINGLELINE | DT_LEFT, line.color);
+                    DrawAnswerLine(surface_, line, clip,
+                                   {convoRect_.left, convoRect_.top - scroll_});
                 }
             }
         }
