@@ -2115,6 +2115,12 @@ the problem. Include screenshots when useful and remove private content.
   $description:vi: "Không bắt buộc. Khóa API của Gemini, ChatGPT hoặc Claude; mod tự nhận biết đó là khóa nào. Lấy khóa tại https://aistudio.google.com/apikey (Gemini, miễn phí), https://platform.openai.com/api-keys (ChatGPT) hoặc https://platform.claude.com/settings/keys (Claude)"
   $description:zh-CN: "可选。Gemini、ChatGPT 或 Claude 的 API 密钥，Mod 会自动识别是哪一种。可在 https://aistudio.google.com/apikey（Gemini，免费）、https://platform.openai.com/api-keys（ChatGPT）或 https://platform.claude.com/settings/keys（Claude）获取"
   $description:zh-TW: "選用。Gemini、ChatGPT 或 Claude 的 API 金鑰，模組會自動辨識是哪一種。可在 https://aistudio.google.com/apikey（Gemini，免費）、https://platform.openai.com/api-keys（ChatGPT）或 https://platform.claude.com/settings/keys（Claude）取得"
+- geminiKeys: [""]
+  $name: Extra Gemini API keys
+  $description: >-
+    Optional. Gemini only, ignored with other providers. Tried in order when
+    the main Gemini key is rate-limited, out of quota or rejected. Each entry
+    is a separate key
 - model: fast
   $name: Model
   $description: >-
@@ -3185,6 +3191,7 @@ struct Settings {
     std::wstring browser;
     std::wstring browserPath;
     std::wstring apiKey;
+    std::vector<std::wstring> geminiKeys;  // Optional extra keys, Gemini only.
     std::wstring model;
     bool suggestions = false;
     std::wstring translateTo;
@@ -3244,6 +3251,14 @@ Settings LoadSettings() {
     s.browser = GetStringSetting(L"browser");
     s.browserPath = GetStringSetting(L"browserPath");
     s.apiKey = GetApiKeySetting(L"apiKey");
+    for (int i = 0; i < 8; i++) {
+        const std::wstring name = L"geminiKeys[" + std::to_wstring(i) + L"]";
+        const std::wstring key = GetApiKeySetting(name.c_str());
+        if (key.empty()) {
+            break;
+        }
+        s.geminiKeys.push_back(key);
+    }
     s.model = GetStringSetting(L"model");
     s.suggestions = Wh_GetIntSetting(L"suggestions") != 0;
     s.translateTo = GetStringSetting(L"translateTo");
@@ -10593,6 +10608,8 @@ struct AiJob {
     bool suggestions = false;
     Provider provider = Provider::Gemini;
     std::wstring apiKey;
+    std::vector<std::wstring> apiKeys;  // Extra keys, Gemini only.
+    size_t apiKeyIndex = 0;
     std::wstring model;
     std::vector<std::wstring> fallbackModels;  // Tried when `model` isn't available.
     std::vector<std::shared_ptr<const Image>> images;
@@ -11659,6 +11676,47 @@ std::vector<std::wstring> ParseSuggestions(const std::string& text) {
 constexpr int kSuggestionImageSize = 768;
 constexpr int kAnswerImageSize = 1536;
 
+// Extra keys are Gemini only for now.
+std::vector<std::wstring> ExtraAiKeys(const Settings& settings,
+                                      Provider provider) {
+    if (provider != Provider::Gemini) {
+        return {};
+    }
+
+    std::vector<std::wstring> keys;
+    for (const std::wstring& key : settings.geminiKeys) {
+        if (ProviderOfKey(key) != Provider::Gemini || key == settings.apiKey ||
+            std::find(keys.begin(), keys.end(), key) != keys.end()) {
+            continue;
+        }
+        keys.push_back(key);
+    }
+    return keys;
+}
+
+// Handles failures another key can fix. Model failures go to DiagnoseModel.
+// Caller must gate this on Gemini.
+bool AdvanceApiKey(AiJob& job, DWORD status, const std::string& apiMessage,
+                   const std::string& apiCode) {
+    if (job.apiKeyIndex >= job.apiKeys.size()) {
+        return false;
+    }
+
+    const bool modelProblem = ContainsNoCase(apiMessage, "model") ||
+                              ContainsNoCase(apiCode, "model");
+    const bool keyProblem =
+        status == 401 || status == 402 ||
+        IsInvalidKey(job.provider, status, apiMessage) ||
+        (status == 403 && !modelProblem) ||
+        status == 429;
+    if (!keyProblem) {
+        return false;
+    }
+
+    job.apiKey = job.apiKeys[job.apiKeyIndex++];
+    return true;
+}
+
 DWORD WINAPI AiThreadProc(LPVOID param) {
     std::unique_ptr<std::shared_ptr<AiJob>> holder(
         static_cast<std::shared_ptr<AiJob>*>(param));
@@ -11832,6 +11890,13 @@ DWORD WINAPI AiThreadProc(LPVOID param) {
             Wh_Log(L"%s: trying another thinking setting (%d)", model.c_str(), step);
             continue;
         }
+        // Gemini only for now. Other providers use the model fallback below.
+        if (job.provider == Provider::Gemini &&
+            AdvanceApiKey(job, result.status, apiMessage, apiCode)) {
+            Wh_Log(L"%s: trying API key %d", model.c_str(),
+                   static_cast<int>(job.apiKeyIndex + 1));
+            continue;
+        }
         const bool timedOut = result.status == 0 && result.awaitedResponse &&
                               result.error == ERROR_WINHTTP_TIMEOUT;
         const ModelTrouble trouble =
@@ -11895,6 +11960,7 @@ std::shared_ptr<AiJob> NewAiJob(bool suggestions) {
     job->suggestions = suggestions;
     job->provider = provider;
     job->apiKey = g_settings.apiKey;
+    job->apiKeys = ExtraAiKeys(g_settings, provider);
     if (suggestions) {
         job->model = DefaultModel(provider);
         job->fallbackModels.push_back(SelectedModel(g_settings, provider));
