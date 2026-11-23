@@ -1,7 +1,7 @@
 // ==WindhawkMod==
 // @id              magic-pointer
 // @name            Magic Pointer
-// @description     Shake the mouse cursor to summon a Googlebook-style Magic Pointer, then point at or select anything on screen and ask Gemini, ChatGPT or Claude about it
+// @description     Shake the mouse cursor to summon Magic Pointer, then point at or select anything on screen and ask Gemini, ChatGPT, Claude or an OpenAI-compatible cloud API about it
 // @description:ar  حرك مؤشر الماوس لاستدعاء Magic Pointer بأسلوب Googlebook، ثم أشر إلى أي شيء على الشاشة أو حدده واسأل Gemini أو ChatGPT أو Claude عنه
 // @description:bn  মাউস কার্সার ঝাঁকিয়ে Googlebook ধাঁচের Magic Pointer ডাকুন, তারপর পর্দার যেকোনো কিছুর দিকে নির্দেশ করুন বা সেটি বেছে নিন এবং Gemini, ChatGPT বা Claude-কে সে সম্পর্কে জিজ্ঞাসা করুন
 // @description:cs  Zatřeste kurzorem myši a vyvolejte Magic Pointer ve stylu Googlebooku, pak na cokoli na obrazovce ukažte nebo to vyberte a zeptejte se na to AI (Gemini, ChatGPT nebo Claude)
@@ -32,7 +32,7 @@
 // @description:vi  Lắc con trỏ chuột để gọi Magic Pointer kiểu Googlebook, sau đó trỏ vào hoặc chọn bất kỳ thứ gì trên màn hình rồi hỏi Gemini, ChatGPT hoặc Claude về nó
 // @description:zh-CN 摇动鼠标指针，唤出 Googlebook 风格的 Magic Pointer，然后指向或选择屏幕上的任意内容，并向 Gemini、ChatGPT 或 Claude 提问
 // @description:zh-TW 搖動滑鼠游標，叫出 Googlebook 風格的 Magic Pointer，然後指向或選取螢幕上的任何內容，並向 Gemini、ChatGPT 或 Claude 提問
-// @version         1.0.4
+// @version         1.0.5
 // @author          Rono
 // @github          https://github.com/rono-zeroseven
 // @include         windhawk.exe
@@ -45,8 +45,8 @@
 
 The Magic Pointer from Google's Googlebooks, on Windows: an AI mouse cursor.
 Wiggle the mouse, then point at anything on screen, select it, and ask Gemini,
-ChatGPT or Claude about it, search it with Google Lens, copy its text or
-translate it.
+ChatGPT, Claude or a configured OpenAI-compatible cloud provider about it,
+search it with Google Lens, copy its text or translate it.
 
 [GitHub](https://github.com/rono-zeroseven) · Discord: **rono007**
 
@@ -74,7 +74,7 @@ typing to ask** in the settings.
 Press **Esc** or **right-click** to put the Magic Pointer away. It also leaves
 on its own when the mouse stays still for a while.
 
-## Gemini, ChatGPT and Claude
+## AI providers
 
 Paste an API key in the mod's Windhawk settings to receive answers directly in
 the card. You can ask follow-up questions. There is just one **API key**
@@ -89,16 +89,32 @@ setting: the mod recognizes which service a key belongs to.
   [Claude Console](https://platform.claude.com/settings/keys). Anthropic bills
   API usage to your account.
 
-With a key, that assistant handles everything that needs one: answers,
-follow-up questions, **Smart suggestions** and **Translate**. The **Model**
-setting chooses how it answers. **Fast**, the default, starts in a second or
+For another cloud service that implements the OpenAI-compatible Chat
+Completions API, set **Base URL (OpenAI-compatible)** and **Custom model** in
+Windhawk settings, and put its API key in **API key**. Examples of base URLs:
+
+* Groq: `https://api.groq.com/openai/v1`
+* OpenRouter: `https://openrouter.ai/api/v1`
+* Mistral: `https://api.mistral.ai/v1`
+* Agnes AI: `https://apihub.agnes-ai.com/v1`
+
+Enter the base URL, not the full `/chat/completions` path; the mod adds it.
+Only HTTPS cloud endpoints are supported. A configured Base URL takes
+precedence over API-key recognition. Enter the exact model ID from the provider;
+the **Model** tier setting is ignored for this connection. Choose a vision model
+to ask about selected images. Provider catalogs and model IDs may change, so
+check the provider's current documentation.
+
+With a configured API provider, it handles answers, follow-up questions,
+**Smart suggestions** and **Translate**. The **Model** setting chooses how
+Gemini, ChatGPT or Claude answers. **Fast**, the default, starts in a second or
 two. **Balanced** and **Smartest** think longer, so their answers are better
 but start later and cost more. They use Gemini Flash-Lite, 3.6 Flash and Pro
 (Pro usually needs a paid plan); ChatGPT gpt-6-luna, gpt-6.1-terra and
 gpt-6.1-sol; Claude Haiku 5.5, Sonnet 5.5 and Opus 5.5. If the chosen model
 isn't available, for example because it is busy or needs a paid plan, a faster
-one answers instead. Without any key, Magic Pointer works through Gemini in
-your browser, as described below.
+one answers instead. Without a configured API provider, Magic Pointer works
+through Gemini in your browser, as described below.
 
 **Smart suggestions** are optional and disabled by default. When enabled,
 the assistant suggests up to three things to do with each selection, always
@@ -139,8 +155,9 @@ extra context. OCR uses the languages installed in Windows.
 ## Privacy and temporary files
 
 Summoning the pointer, selecting an area and copying its image or text stay
-on your PC with the default settings. The mod contacts the services of
-Google, OpenAI or Anthropic when you use these features:
+on your PC with the default settings. The mod contacts Google, OpenAI,
+Anthropic, or the provider configured by a custom Base URL when you use these
+features:
 
 * With an API key, **Send**, a suggestion chip or **Translate** sends your
   selected regions as JPEG images (up to 1536 pixels on the longest side),
@@ -149,6 +166,9 @@ Google, OpenAI or Anthropic when you use these features:
   `generativelanguage.googleapis.com` for Gemini, `api.openai.com` for
   ChatGPT or `api.anthropic.com` for Claude. Only that service receives
   them. Follow-up questions include the selections and conversation again.
+  With an OpenAI-compatible Base URL configured, the same content is sent over
+  HTTPS to that custom provider's host, with your key as a Bearer token. The
+  custom provider's terms and privacy policy apply.
 * **Smart suggestions** is off by default. If you enable it with an API key,
   every selection is uploaded as soon as you make or add it, even if you only
   intend to copy its text or search it with Lens. The suggestion request sends
@@ -2054,7 +2074,8 @@ the problem. Include screenshots when useful and remove private content.
     Optional. A Gemini, ChatGPT or Claude API key; the mod recognizes which
     one it is. Get one at https://aistudio.google.com/apikey (Gemini, free),
     https://platform.openai.com/api-keys (ChatGPT) or
-    https://platform.claude.com/settings/keys (Claude)
+    https://platform.claude.com/settings/keys (Claude). For an OpenAI-compatible
+    provider, set Base URL and Custom model below and use that provider's key
   $name:ar: "مفتاح API"
   $name:bn: "API কী"
   $name:cs: "Klíč API"
@@ -2115,6 +2136,23 @@ the problem. Include screenshots when useful and remove private content.
   $description:vi: "Không bắt buộc. Khóa API của Gemini, ChatGPT hoặc Claude; mod tự nhận biết đó là khóa nào. Lấy khóa tại https://aistudio.google.com/apikey (Gemini, miễn phí), https://platform.openai.com/api-keys (ChatGPT) hoặc https://platform.claude.com/settings/keys (Claude)"
   $description:zh-CN: "可选。Gemini、ChatGPT 或 Claude 的 API 密钥，Mod 会自动识别是哪一种。可在 https://aistudio.google.com/apikey（Gemini，免费）、https://platform.openai.com/api-keys（ChatGPT）或 https://platform.claude.com/settings/keys（Claude）获取"
   $description:zh-TW: "選用。Gemini、ChatGPT 或 Claude 的 API 金鑰，模組會自動辨識是哪一種。可在 https://aistudio.google.com/apikey（Gemini，免費）、https://platform.openai.com/api-keys（ChatGPT）或 https://platform.claude.com/settings/keys（Claude）取得"
+- baseUrl: ""
+  $name: Base URL (OpenAI-compatible)
+  $description: >-
+    Optional. Base URL of an OpenAI-compatible API, for example Groq
+    (https://api.groq.com/openai/v1), OpenRouter
+    (https://openrouter.ai/api/v1), Mistral (https://api.mistral.ai/v1) or
+    Agnes AI (https://apihub.agnes-ai.com/v1). Leave empty to use Gemini,
+    ChatGPT or Claude auto-detection from the API key. When set, the API key
+    is sent as a Bearer token to this URL and the Custom model setting
+    chooses the model
+- customModel: ""
+  $name: Custom model
+  $description: >-
+    Exact model ID from your provider; copy it as shown, including any
+    organization/model namespace. Required when Base URL is set. Pick a
+    vision-capable model to ask about images. The Model setting
+    (Fast/Balanced/Smartest) is ignored for this provider
 - model: fast
   $name: Model
   $description: >-
@@ -3185,6 +3223,8 @@ struct Settings {
     std::wstring browser;
     std::wstring browserPath;
     std::wstring apiKey;
+    std::wstring baseUrl;
+    std::wstring customModel;
     std::wstring model;
     bool suggestions = false;
     std::wstring translateTo;
@@ -3244,6 +3284,8 @@ Settings LoadSettings() {
     s.browser = GetStringSetting(L"browser");
     s.browserPath = GetStringSetting(L"browserPath");
     s.apiKey = GetApiKeySetting(L"apiKey");
+    s.baseUrl = GetStringSetting(L"baseUrl");
+    s.customModel = GetStringSetting(L"customModel");
     s.model = GetStringSetting(L"model");
     s.suggestions = Wh_GetIntSetting(L"suggestions") != 0;
     s.translateTo = GetStringSetting(L"translateTo");
@@ -3252,7 +3294,7 @@ Settings LoadSettings() {
 
 Settings g_settings;
 
-enum class Provider { Gemini, OpenAi, Anthropic };
+enum class Provider { Gemini, OpenAi, Anthropic, OpenAiCompatible };
 
 PCWSTR ProviderName(Provider provider) {
     switch (provider) {
@@ -3260,6 +3302,8 @@ PCWSTR ProviderName(Provider provider) {
             return L"ChatGPT";
         case Provider::Anthropic:
             return L"Claude";
+        case Provider::OpenAiCompatible:
+            return L"AI";
         case Provider::Gemini:
             break;
     }
@@ -3277,6 +3321,10 @@ Provider ProviderOfKey(const std::wstring& key) {
 }
 
 bool ActiveProvider(const Settings& settings, Provider& provider) {
+    if (!settings.baseUrl.empty()) {
+        provider = Provider::OpenAiCompatible;
+        return true;
+    }
     if (settings.apiKey.empty()) {
         return false;
     }
@@ -3285,10 +3333,14 @@ bool ActiveProvider(const Settings& settings, Provider& provider) {
 }
 
 bool HasAiKey() {
-    return !g_settings.apiKey.empty();
+    return !g_settings.apiKey.empty() || !g_settings.baseUrl.empty();
 }
 
 std::wstring AssistantName() {
+    Provider provider;
+    if (ActiveProvider(g_settings, provider)) {
+        return ProviderName(provider);
+    }
     return ProviderName(ProviderOfKey(g_settings.apiKey));
 }
 
@@ -10593,6 +10645,7 @@ struct AiJob {
     bool suggestions = false;
     Provider provider = Provider::Gemini;
     std::wstring apiKey;
+    std::wstring baseUrl;
     std::wstring model;
     std::vector<std::wstring> fallbackModels;  // Tried when `model` isn't available.
     std::vector<std::shared_ptr<const Image>> images;
@@ -10612,6 +10665,9 @@ struct AiJob {
 };
 
 PCWSTR TierModel(Provider provider, int tier) {
+    if (provider == Provider::OpenAiCompatible) {
+        return L"";  // The model ID must come from the custom provider.
+    }
     static const PCWSTR kModels[3][3] = {
         {L"gemini-flash-lite-latest", L"gemini-3.6-flash", L"gemini-pro-latest"},
         {L"gpt-6-luna", L"gpt-6.1-terra", L"gpt-6.1-sol"},
@@ -10636,12 +10692,18 @@ bool UsesModelId(const Settings& settings, Provider provider) {
 }
 
 std::wstring SelectedModel(const Settings& settings, Provider provider) {
+    if (provider == Provider::OpenAiCompatible) {
+        return settings.customModel;
+    }
     return UsesModelId(settings, provider)
                ? settings.model
                : std::wstring(TierModel(provider, SelectedTier(settings)));
 }
 
 std::vector<std::wstring> FallbackModels(const Settings& settings, Provider provider) {
+    if (provider == Provider::OpenAiCompatible) {
+        return {};
+    }
     std::vector<std::wstring> models;
     for (int tier = UsesModelId(settings, provider) ? 0 : SelectedTier(settings) - 1;
          tier >= 0; tier--) {
@@ -10656,7 +10718,8 @@ std::wstring SanitizeModel(std::wstring model) {
     }
     std::wstring result;
     for (wchar_t c : model) {
-        if (iswalnum(c) || c == L'-' || c == L'.' || c == L'_') {
+        if (iswalnum(c) || c == L'-' || c == L'.' || c == L'_' || c == L'/' ||
+            c == L':' || c == L'@') {
             result += c;
         }
     }
@@ -10680,11 +10743,16 @@ struct UnavailableModel {
 std::vector<UnavailableModel> g_unavailable;
 
 int LastStep(Provider provider) {
+    if (provider == Provider::OpenAiCompatible) {
+        return 0;
+    }
     return provider == Provider::OpenAi ? 2 : 3;
 }
 
 int FirstStep(Provider provider, const std::wstring& model, bool suggestions) {
     switch (provider) {
+        case Provider::OpenAiCompatible:
+            return 0;
         case Provider::OpenAi:
             return suggestions &&
                            (model == L"gpt-6-luna" || model == L"gpt-6.1-terra")
@@ -11019,6 +11087,62 @@ std::string BuildAnthropicBody(const AiJob& job,
     return body;
 }
 
+std::string BuildOpenAiCompatibleBody(const AiJob& job,
+                                    const std::wstring& model,
+                                    const std::vector<std::string>& images,
+                                    int step) {
+    (void)step;  // OpenAI-compatible providers have no reasoning steps.
+    std::string body = "{\"model\":";
+    AppendJsonString(body, ToUtf8(model));
+    body += ",\"stream\":true,\"messages\":[{\"role\":\"system\",\"content\":";
+    AppendJsonString(body, SystemInstruction(job));
+    body += "}";
+
+    auto appendImages = [&] {
+        for (const std::string& image : images) {
+            body += "{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/jpeg;base64,";
+            body += image;
+            body += "\"}},";
+        }
+    };
+
+    if (job.suggestions) {
+        body += ",{\"role\":\"user\",\"content\":[";
+        appendImages();
+        body += "{\"type\":\"text\",\"text\":";
+        AppendJsonString(body, SuggestionPrompt(job));
+        body += "}]}";
+    } else {
+        for (size_t i = 0; i < job.history.size(); i++) {
+            const ChatTurn& turn = job.history[i];
+            const std::string text = turn.text.empty() ? std::string(".") : turn.text;
+            if (turn.fromUser) {
+                body += ",{\"role\":\"user\",\"content\":";
+                if (i == 0 && !images.empty()) {
+                    body += "[";
+                    appendImages();
+                    body += "{\"type\":\"text\",\"text\":";
+                    AppendJsonString(body, text);
+                    body += "}]}";
+                } else {
+                    AppendJsonString(body, text);
+                    body += '}';
+                }
+            } else {
+                body += ",{\"role\":\"assistant\",\"content\":";
+                AppendJsonString(body, text);
+                body += '}';
+            }
+        }
+    }
+    body += ']';
+    if (job.suggestions) {
+        body += ",\"max_tokens\":2048";
+    }
+    body += '}';
+    return body;
+}
+
 std::string BuildRequestBody(const AiJob& job,
                              const std::wstring& model,
                              const std::vector<std::string>& images,
@@ -11028,6 +11152,8 @@ std::string BuildRequestBody(const AiJob& job,
             return BuildOpenAiBody(job, model, images, step);
         case Provider::Anthropic:
             return BuildAnthropicBody(job, model, images, step);
+        case Provider::OpenAiCompatible:
+            return BuildOpenAiCompatibleBody(job, model, images, step);
         case Provider::Gemini:
             break;
     }
@@ -11192,6 +11318,8 @@ bool NeedsOtherTuning(Provider provider, DWORD status, const std::string& apiMes
         return false;
     }
     switch (provider) {
+        case Provider::OpenAiCompatible:
+            return false;
         case Provider::OpenAi:
             return ContainsNoCase(apiMessage, "reasoning") ||
                    ContainsNoCase(apiMessage, "effort");
@@ -11274,6 +11402,36 @@ void ReadAnthropicEvent(const Json& root,
     }
 }
 
+void ReadOpenAiCompatibleEvent(const Json& root,
+                               std::string& text,
+                               std::string& finishReason,
+                               std::string& streamError) {
+    if (const Json* error = root.Get("error")) {
+        if (const Json* message = error->Get("message")) {
+            streamError = message->string;
+        }
+        if (streamError.empty()) {
+            streamError = ToUtf8(TrFormat(Str::ErrStreaming, ProviderName(Provider::OpenAiCompatible)));
+        }
+        return;
+    }
+    if (const Json* choices = root.Get("choices")) {
+        if (const Json* choice = choices->At(0)) {
+            if (const Json* delta = choice->Get("delta")) {
+                text += JsonText(delta->Get("content"));
+            } else if (const Json* message = choice->Get("message")) {
+                text += JsonText(message->Get("content"));
+            }
+            const std::string reason = JsonText(choice->Get("finish_reason"));
+            if (!reason.empty()) {
+                finishReason = reason == "stop"   ? "STOP"
+                               : reason == "length" ? "MAX_TOKENS"
+                                                    : reason;
+            }
+        }
+    }
+}
+
 void ReadStreamEvent(Provider provider,
                      const Json& root,
                      std::string& text,
@@ -11285,6 +11443,9 @@ void ReadStreamEvent(Provider provider,
             return;
         case Provider::Anthropic:
             ReadAnthropicEvent(root, text, finishReason, streamError);
+            return;
+        case Provider::OpenAiCompatible:
+            ReadOpenAiCompatibleEvent(root, text, finishReason, streamError);
             return;
         case Provider::Gemini:
             break;
@@ -11418,10 +11579,87 @@ struct HttpResult {
 };
 
 struct ApiEndpoint {
-    PCWSTR host;
+    std::wstring host;
     std::wstring path;
     std::wstring headers;
+    INTERNET_PORT port = INTERNET_DEFAULT_HTTPS_PORT;
+    bool secure = true;
+    bool valid = true;
 };
+
+bool ParseBaseUrl(const std::wstring& baseUrl,
+                  std::wstring& host,
+                  std::wstring& path,
+                  INTERNET_PORT& port,
+                  bool& secure) {
+    std::wstring url = baseUrl;
+    while (!url.empty() && url.back() == L'/') {
+        url.pop_back();
+    }
+    if (url.empty()) {
+        return false;
+    }
+    secure = true;  // Custom providers are cloud HTTPS endpoints only.
+    size_t schemeEnd = url.find(L"://");
+    if (schemeEnd != std::wstring::npos) {
+        const std::wstring scheme = url.substr(0, schemeEnd);
+        if (_wcsicmp(scheme.c_str(), L"https") != 0) {
+            return false;
+        }
+        url = url.substr(schemeEnd + 3);
+    }
+    if (url.empty() || url.find_first_of(L"?# \t\r\n") != std::wstring::npos) {
+        return false;
+    }
+    const size_t slash = url.find(L'/');
+    const std::wstring authority =
+        slash == std::wstring::npos ? url : url.substr(0, slash);
+    std::wstring basePath =
+        slash == std::wstring::npos ? L"" : url.substr(slash);
+    while (!basePath.empty() && basePath.back() == L'/') {
+        basePath.pop_back();
+    }
+    const size_t colon = authority.rfind(L':');
+    if (colon != std::wstring::npos) {
+        host = authority.substr(0, colon);
+        const std::wstring portText = authority.substr(colon + 1);
+        if (portText.empty()) {
+            return false;
+        }
+        unsigned long portValue = 0;
+        for (wchar_t c : portText) {
+            if (c < L'0' || c > L'9') {
+                return false;
+            }
+            portValue = portValue * 10 + (c - L'0');
+            if (portValue > 65535) {
+                return false;
+            }
+        }
+        if (portValue == 0) {
+            return false;
+        }
+        port = static_cast<INTERNET_PORT>(portValue);
+    } else {
+        host = authority;
+        port = INTERNET_DEFAULT_HTTPS_PORT;
+    }
+    if (host.empty() || host.find(L'@') != std::wstring::npos ||
+        host.find(L':') != std::wstring::npos ||
+        _wcsicmp(host.c_str(), L"localhost") == 0 ||
+        (host.size() >= 10 &&
+         _wcsicmp(host.c_str() + host.size() - 10, L".localhost") == 0) ||
+        host.rfind(L"127.", 0) == 0 || host == L"0.0.0.0") {
+        return false;
+    }
+    if (basePath.size() >= 17 &&
+        basePath.compare(basePath.size() - 17, 17, L"/chat/completions") == 0) {
+        path = basePath;
+    } else {
+        path = basePath + L"/chat/completions";
+    }
+    return true;
+}
 
 ApiEndpoint EndpointFor(const AiJob& job, const std::wstring& model) {
     switch (job.provider) {
@@ -11436,6 +11674,18 @@ ApiEndpoint EndpointFor(const AiJob& job, const std::wstring& model) {
                     L"anthropic-version: 2023-06-01\r\n"
                     L"x-api-key: " +
                         job.apiKey + L"\r\n"};
+        case Provider::OpenAiCompatible: {
+            ApiEndpoint endpoint;
+            if (!ParseBaseUrl(job.baseUrl, endpoint.host, endpoint.path,
+                              endpoint.port, endpoint.secure)) {
+                endpoint.valid = false;
+            }
+            endpoint.headers = L"Content-Type: application/json\r\n";
+            if (!job.apiKey.empty()) {
+                endpoint.headers += L"Authorization: Bearer " + job.apiKey + L"\r\n";
+            }
+            return endpoint;
+        }
         case Provider::Gemini:
             break;
     }
@@ -11455,19 +11705,23 @@ HttpResult SendToApi(const ApiEndpoint& endpoint,
                      DWORD receiveTimeout,
                      OnData onData) {
     HttpResult result;
+    if (!endpoint.valid) {
+        result.error = ERROR_INVALID_PARAMETER;
+        return result;
+    }
     HINTERNET session = ApiSession();
     if (!session) {
         result.error = GetLastError();
         return result;
     }
-    HINTERNET connection = WinHttpConnect(
-        session, endpoint.host, INTERNET_DEFAULT_HTTPS_PORT, 0);
+    HINTERNET connection =
+        WinHttpConnect(session, endpoint.host.c_str(), endpoint.port, 0);
     HINTERNET request =
         connection
             ? WinHttpOpenRequest(connection, L"POST", endpoint.path.c_str(), nullptr,
                                  WINHTTP_NO_REFERER,
                                  WINHTTP_DEFAULT_ACCEPT_TYPES,
-                                 WINHTTP_FLAG_SECURE)
+                                 endpoint.secure ? WINHTTP_FLAG_SECURE : 0)
             : nullptr;
     if (!request) {
         result.error = GetLastError();
@@ -11682,7 +11936,9 @@ DWORD WINAPI AiThreadProc(LPVOID param) {
     const std::wstring name = ProviderName(job.provider);
     std::vector<std::wstring> models;
     auto addModel = [&](const std::wstring& candidate) {
-        const std::wstring clean = SanitizeModel(candidate);
+        const std::wstring clean = job.provider == Provider::OpenAiCompatible
+                                       ? candidate
+                                       : SanitizeModel(candidate);
         if (!clean.empty() && std::find(models.begin(), models.end(), clean) == models.end()) {
             models.push_back(clean);
         }
@@ -11692,6 +11948,11 @@ DWORD WINAPI AiThreadProc(LPVOID param) {
         addModel(candidate);
     }
     if (models.empty()) {
+        if (job.provider == Provider::OpenAiCompatible) {
+            PostAiMessage(job, AiEvent::Error,
+                          L"Enter a model name in the Custom model setting.");
+            return 0;
+        }
         models.push_back(DefaultModel(job.provider));
     }
     auto skipUnavailable = [&](size_t from) {
@@ -11736,6 +11997,9 @@ DWORD WINAPI AiThreadProc(LPVOID param) {
         SseParser sse;
         auto onEvent = [&](const std::string& data) {
             if (data == "[DONE]") {
+                if (job.provider == Provider::OpenAiCompatible && finishReason.empty()) {
+                    finishReason = "STOP";
+                }
                 return;
             }
             Json root;
@@ -11895,7 +12159,10 @@ std::shared_ptr<AiJob> NewAiJob(bool suggestions) {
     job->suggestions = suggestions;
     job->provider = provider;
     job->apiKey = g_settings.apiKey;
-    if (suggestions) {
+    job->baseUrl = g_settings.baseUrl;
+    if (provider == Provider::OpenAiCompatible) {
+        job->model = SelectedModel(g_settings, provider);
+    } else if (suggestions) {
         job->model = DefaultModel(provider);
         job->fallbackModels.push_back(SelectedModel(g_settings, provider));
     } else {
@@ -12691,7 +12958,8 @@ class AskCard {
 
     void StartSuggestions(double now) {
         CancelSuggestions();
-        if (!g_settings.suggestions || attachments_.empty()) {
+        if (!g_settings.suggestions || attachments_.empty() ||
+            (!g_settings.baseUrl.empty() && g_settings.customModel.empty())) {
             return;
         }
         auto job = NewAiJob(true);
