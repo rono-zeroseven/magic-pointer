@@ -105,6 +105,23 @@ the **Model** tier setting is ignored for this connection. Choose a vision model
 to ask about selected images. Provider catalogs and model IDs may change, so
 check the provider's current documentation.
 
+### Custom-provider errors
+
+- **Invalid Base URL:** enter an HTTPS cloud base URL without a query or
+  fragment. The mod appends `/chat/completions`; localhost and loopback URLs
+  are not supported.
+- **Model or endpoint not found:** check the Base URL and exact model ID from
+  the provider's current catalog.
+- **Rejected API key:** confirm the key belongs to the provider selected by
+  the custom Base URL. A configured Base URL takes precedence over key
+  auto-detection.
+- **Unsupported image:** “OpenAI-compatible” describes the API format, not
+  model capabilities. The endpoint and model must accept JPEG `image_url` data
+  URLs and support vision. Math-from-image ability is a separate capability;
+  check that the selected model also has suitable math reasoning.
+- **Rate limit:** wait and retry, and check the provider's current usage limits
+  or account quota. A retry is not guaranteed to succeed.
+
 With a configured API provider, it handles answers, follow-up questions,
 **Smart suggestions** and **Translate**. The **Model** setting chooses how
 Gemini, ChatGPT or Claude answers. **Fast**, the default, starts in a second or
@@ -2139,19 +2156,21 @@ the problem. Include screenshots when useful and remove private content.
 - baseUrl: ""
   $name: Base URL (OpenAI-compatible)
   $description: >-
-    Optional. Base URL of an OpenAI-compatible API, for example Groq
-    (https://api.groq.com/openai/v1), OpenRouter
+    Optional HTTPS base URL for an OpenAI-compatible Chat Completions API,
+    for example Groq (https://api.groq.com/openai/v1), OpenRouter
     (https://openrouter.ai/api/v1), Mistral (https://api.mistral.ai/v1) or
-    Agnes AI (https://apihub.agnes-ai.com/v1). Leave empty to use Gemini,
-    ChatGPT or Claude auto-detection from the API key. When set, the API key
-    is sent as a Bearer token to this URL and the Custom model setting
-    chooses the model
+    Agnes AI (https://apihub.agnes-ai.com/v1). Enter the base path, not the
+    full /chat/completions path; query strings and fragments aren't supported.
+    Leave empty to use Gemini, ChatGPT or Claude auto-detection from the API
+    key. When set, the API key (if provided) is sent as a Bearer token and the
+    Custom model setting chooses the model
 - customModel: ""
   $name: Custom model
   $description: >-
     Exact model ID from your provider; copy it as shown, including any
-    organization/model namespace. Required when Base URL is set. Pick a
-    vision-capable model to ask about images. The Model setting
+    organization/model namespace. Required when Base URL is set. For images,
+    the endpoint and model must support JPEG image_url data URLs and vision;
+    math-from-image also requires suitable model reasoning. The Model setting
     (Fast/Balanced/Smartest) is ignored for this provider
 - model: fast
   $name: Model
@@ -3424,6 +3443,11 @@ bool UseDarkTheme() {
     X(BrowserFailedMany, L"Couldn't open the browser. The images are copied; paste them into Gemini with Ctrl+V.") \
     X(BrowserFailedText, L"Couldn't open the browser.") \
     X(PageUnreadable, L"Magic Pointer couldn't read the page in your browser. If a notice is open over it, close it and click Ask in Gemini again.") \
+    X(ErrCustomBaseUrl, L"The custom Base URL is invalid. Enter an HTTPS cloud URL, such as https://api.example.com/v1.") \
+    X(ErrCustomModelRequired, L"Enter the exact model ID from your custom provider in the Custom model setting.") \
+    X(ErrCustomModelOrEndpoint, L"The custom provider did not find this model or API path. Check the Base URL and exact model ID.") \
+    X(ErrCustomKeyRejected, L"The custom provider rejected the API key. Check that the key belongs to the configured Base URL.") \
+    X(ErrCustomImageUnsupported, L"This provider or model couldn't process the selected image. Check image_url and base64 data-URL support, and choose a vision-capable model. Math from images also depends on the model.") \
     X(ErrKeyInvalid, L"Your {0} API key isn't valid. Check it in the mod's settings.") \
     X(ErrKeyForbidden, L"This API key can't use {0} (403). Check the key in the mod's settings.") \
     X(ErrModelMissing, L"The model \"{0}\" isn't available to your key. Pick another model in the mod's settings.") \
@@ -11232,10 +11256,109 @@ bool IsBillingError(const std::string& apiMessage, const std::string& apiCode) {
            ContainsNoCase(apiMessage, "current quota");
 }
 
-bool IsInvalidKey(Provider provider, DWORD status, const std::string& apiMessage) {
+bool IsCustomKeyRejection(DWORD status,
+                          const std::string& apiMessage,
+                          const std::string& apiCode) {
+    if (status == 401) {
+        return true;
+    }
+    if (status != 0 && status != 400 && status != 403) {
+        return false;
+    }
+    const std::string detail = apiCode + " " + apiMessage;
+    return ContainsNoCase(detail, "invalid api key") ||
+           ContainsNoCase(detail, "api key not valid") ||
+           ContainsNoCase(detail, "api_key_invalid") ||
+           ContainsNoCase(detail, "incorrect api key") ||
+           ContainsNoCase(detail, "invalid_api_key") ||
+           ContainsNoCase(detail, "invalid key") ||
+           ContainsNoCase(detail, "key is invalid") ||
+           ContainsNoCase(detail, "key not valid") ||
+           ContainsNoCase(detail, "invalid token") ||
+           ContainsNoCase(detail, "unauthorized") ||
+           ContainsNoCase(detail, "authentication failed") ||
+           ContainsNoCase(detail, "authentication error") ||
+           ContainsNoCase(detail, "missing authorization");
+}
+
+bool IsInvalidKey(Provider provider,
+                  DWORD status,
+                  const std::string& apiMessage,
+                  const std::string& apiCode = {}) {
+    if (provider == Provider::OpenAiCompatible) {
+        return IsCustomKeyRejection(status, apiMessage, apiCode);
+    }
     return provider == Provider::Gemini
                ? status == 400 && ContainsNoCase(apiMessage, "API key")
                : status == 401;
+}
+
+bool IsRateLimitResponse(DWORD status,
+                         const std::string& apiMessage,
+                         const std::string& apiCode) {
+    if (status == 429) {
+        return true;
+    }
+    const std::string detail = apiCode + " " + apiMessage;
+    return ContainsNoCase(detail, "rate limit") ||
+           ContainsNoCase(detail, "rate_limit") ||
+           ContainsNoCase(detail, "too many requests") ||
+           ContainsNoCase(detail, "throttl");
+}
+
+bool IsCustomModelError(DWORD status,
+                        const std::string& apiMessage,
+                        const std::string& apiCode) {
+    if (status == 404) {
+        return true;
+    }
+    if (status != 400 && status != 403 && status != 422) {
+        return false;
+    }
+    const std::string detail = apiCode + " " + apiMessage;
+    if (!ContainsNoCase(detail, "model")) {
+        return false;
+    }
+    return ContainsNoCase(detail, "not found") ||
+           ContainsNoCase(detail, "model_not_found") ||
+           ContainsNoCase(detail, "not available") ||
+           ContainsNoCase(detail, "model_not_available") ||
+           ContainsNoCase(detail, "unknown model") ||
+           ContainsNoCase(detail, "does not exist") ||
+           ContainsNoCase(detail, "model_not_exist") ||
+           ContainsNoCase(detail, "not supported") ||
+           ContainsNoCase(detail, "not support") ||
+           ContainsNoCase(detail, "unsupported model") ||
+           ContainsNoCase(detail, "unsupported_model") ||
+           ContainsNoCase(detail, "model_not_supported") ||
+           ContainsNoCase(detail, "invalid model") ||
+           ContainsNoCase(detail, "invalid_model");
+}
+
+bool IsImageCompatibilityError(const std::string& apiMessage,
+                               const std::string& apiCode) {
+    const std::string detail = apiCode + " " + apiMessage;
+    if (ContainsNoCase(detail, "image_url") ||
+        ContainsNoCase(detail, "data url") ||
+        ContainsNoCase(detail, "data-url") ||
+        ContainsNoCase(detail, "data_url") ||
+        ContainsNoCase(detail, "base64 image") ||
+        ContainsNoCase(detail, "unsupported_media") ||
+        ContainsNoCase(detail, "unsupported media type") ||
+        ContainsNoCase(detail, "multimodal")) {
+        return true;
+    }
+    const bool mentionsImage = ContainsNoCase(detail, "image") ||
+                               ContainsNoCase(detail, "vision");
+    const bool mentionsUnsupported = ContainsNoCase(detail, "not support") ||
+                                    ContainsNoCase(detail, "doesn't support") ||
+                                    ContainsNoCase(detail, "does not accept") ||
+                                    ContainsNoCase(detail, "not accept") ||
+                                    ContainsNoCase(detail, "unsupported") ||
+                                    ContainsNoCase(detail, "invalid") ||
+                                    ContainsNoCase(detail, "not allowed") ||
+                                    ContainsNoCase(detail, "requires a vision");
+    return mentionsImage && mentionsUnsupported;
 }
 
 struct ModelTrouble {
@@ -11252,7 +11375,7 @@ ModelTrouble DiagnoseModel(Provider provider,
     if (status == 0) {
         return timedOut ? ModelTrouble{true, 2 * kMinute} : ModelTrouble{};
     }
-    if (IsInvalidKey(provider, status, apiMessage) || status == 401 || status == 402) {
+    if (IsInvalidKey(provider, status, apiMessage, apiCode) || status == 401 || status == 402) {
         return {};
     }
     if (provider != Provider::Gemini && (status == 400 || status == 429) &&
@@ -11284,10 +11407,20 @@ std::wstring FriendlyError(Provider provider,
                            const std::string& apiCode,
                            const std::wstring& model) {
     const std::wstring name = ProviderName(provider);
-    if (IsInvalidKey(provider, status, apiMessage)) {
-        return TrFormat(Str::ErrKeyInvalid, name);
+    if (IsInvalidKey(provider, status, apiMessage, apiCode)) {
+        return provider == Provider::OpenAiCompatible
+                   ? std::wstring(Tr(Str::ErrCustomKeyRejected))
+                   : TrFormat(Str::ErrKeyInvalid, name);
+    }
+    if (provider == Provider::OpenAiCompatible &&
+        IsCustomModelError(status, apiMessage, apiCode)) {
+        return Tr(Str::ErrCustomModelOrEndpoint);
     }
     if (status == 403) {
+        if (provider == Provider::OpenAiCompatible &&
+            IsRateLimitResponse(status, apiMessage, apiCode)) {
+            return TrFormat(Str::ErrRateLimit, name);
+        }
         return TrFormat(Str::ErrKeyForbidden, name);
     }
     if (status == 404) {
@@ -11298,7 +11431,9 @@ std::wstring FriendlyError(Provider provider,
          ((status == 400 || status == 429) && IsBillingError(apiMessage, apiCode)))) {
         return TrFormat(Str::ErrNoCredit, name);
     }
-    if (status == 429) {
+    if (status == 429 ||
+        (provider == Provider::OpenAiCompatible &&
+         IsRateLimitResponse(status, apiMessage, apiCode))) {
         if (provider == Provider::Gemini && ContainsNoCase(apiMessage, "limit: 0")) {
             return TrFormat(Str::ErrNoFreeQuota, model);
         }
@@ -11407,8 +11542,12 @@ void ReadOpenAiCompatibleEvent(const Json& root,
                                std::string& finishReason,
                                std::string& streamError) {
     if (const Json* error = root.Get("error")) {
-        if (const Json* message = error->Get("message")) {
-            streamError = message->string;
+        streamError = JsonText(error->Get("message"));
+        if (streamError.empty()) {
+            streamError = JsonText(error->Get("code"));
+        }
+        if (streamError.empty()) {
+            streamError = JsonText(error->Get("type"));
         }
         if (streamError.empty()) {
             streamError = ToUtf8(TrFormat(Str::ErrStreaming, ProviderName(Provider::OpenAiCompatible)));
@@ -11631,10 +11770,11 @@ bool ParseBaseUrl(const std::wstring& baseUrl,
             if (c < L'0' || c > L'9') {
                 return false;
             }
-            portValue = portValue * 10 + (c - L'0');
-            if (portValue > 65535) {
+            const unsigned long digit = static_cast<unsigned long>(c - L'0');
+            if (portValue > 6553 || (portValue == 6553 && digit > 5)) {
                 return false;
             }
+            portValue = portValue * 10 + digit;
         }
         if (portValue == 0) {
             return false;
@@ -11647,6 +11787,7 @@ bool ParseBaseUrl(const std::wstring& baseUrl,
     if (host.empty() || host.find(L'@') != std::wstring::npos ||
         host.find(L':') != std::wstring::npos ||
         _wcsicmp(host.c_str(), L"localhost") == 0 ||
+        _wcsicmp(host.c_str(), L"localhost.") == 0 ||
         (host.size() >= 10 &&
          _wcsicmp(host.c_str() + host.size() - 10, L".localhost") == 0) ||
         host.rfind(L"127.", 0) == 0 || host == L"0.0.0.0") {
@@ -11949,8 +12090,8 @@ DWORD WINAPI AiThreadProc(LPVOID param) {
     }
     if (models.empty()) {
         if (job.provider == Provider::OpenAiCompatible) {
-            PostAiMessage(job, AiEvent::Error,
-                          L"Enter a model name in the Custom model setting.");
+            PostAiMessage(job, AiEvent::Error, Tr(Str::ErrCustomModelRequired));
+            g_helperThreads--;
             return 0;
         }
         models.push_back(DefaultModel(job.provider));
@@ -11986,6 +12127,14 @@ DWORD WINAPI AiThreadProc(LPVOID param) {
     constexpr int kMaxAttempts = 12;
     for (int attempt = 0; attempt < kMaxAttempts && !job.canceled; attempt++) {
         const ApiEndpoint endpoint = EndpointFor(job, model);
+        if (!endpoint.valid) {
+            if (job.suggestions) {
+                PostAiMessage(job, AiEvent::Suggestions, L"");
+            } else {
+                PostAiMessage(job, AiEvent::Error, Tr(Str::ErrCustomBaseUrl));
+            }
+            break;
+        }
         const std::string body = BuildRequestBody(job, model, images, step);
         std::string answer;
         std::string finishReason;
@@ -12062,9 +12211,24 @@ DWORD WINAPI AiThreadProc(LPVOID param) {
                                                : Str::ErrInterrupted,
                                 name, std::to_wstring(result.error));
             } else if (!streamError.empty()) {
-                note = answer.empty() ? FromUtf8(streamError)
-                                      : TrFormat(Str::ErrInterruptedBy, name,
-                                                 FromUtf8(streamError));
+                if (job.provider == Provider::OpenAiCompatible &&
+                    IsCustomKeyRejection(0, streamError, {})) {
+                    note = Tr(Str::ErrCustomKeyRejected);
+                } else if (job.provider == Provider::OpenAiCompatible &&
+                           !job.images.empty() &&
+                           IsImageCompatibilityError(streamError, {})) {
+                    note = Tr(Str::ErrCustomImageUnsupported);
+                } else if (job.provider == Provider::OpenAiCompatible &&
+                           IsCustomModelError(400, streamError, {})) {
+                    note = Tr(Str::ErrCustomModelOrEndpoint);
+                } else if (job.provider == Provider::OpenAiCompatible &&
+                           IsRateLimitResponse(200, streamError, {})) {
+                    note = TrFormat(Str::ErrRateLimit, name);
+                } else {
+                    note = answer.empty() ? FromUtf8(streamError)
+                                          : TrFormat(Str::ErrInterruptedBy, name,
+                                                     FromUtf8(streamError));
+                }
             } else if (invalidEvent) {
                 note = TrFormat(Str::ErrUnreadable, name);
             } else if (finishReason == "MAX_TOKENS") {
@@ -12113,6 +12277,13 @@ DWORD WINAPI AiThreadProc(LPVOID param) {
             error = TrFormat(Str::ErrTimeout, name);
         } else if (result.status == 0) {
             error = TrFormat(Str::ErrCouldntReach, name, std::to_wstring(result.error));
+        } else if (job.provider == Provider::OpenAiCompatible &&
+                   !job.images.empty() &&
+                   IsImageCompatibilityError(apiMessage, apiCode)) {
+            error = Tr(Str::ErrCustomImageUnsupported);
+        } else if (job.provider == Provider::OpenAiCompatible &&
+                   IsCustomModelError(result.status, apiMessage, apiCode)) {
+            error = Tr(Str::ErrCustomModelOrEndpoint);
         } else {
             error = FriendlyError(job.provider, result.status, apiMessage, apiCode, model);
         }

@@ -10,6 +10,25 @@ the Googlebook-style AI pointer to Windows.
 
 ![Magic Pointer in action](assets/magic-pointer/preview.gif)
 
+## What's New
+
+### v1.0.5 — OpenAI-compatible custom providers
+
+You can now configure a cloud provider that implements the OpenAI-compatible
+Chat Completions API with **Base URL (OpenAI-compatible)**, **Custom model**,
+and that provider's API key. The custom Base URL takes precedence over
+API-key auto-detection for Gemini, ChatGPT and Claude.
+
+> **Important — image and math-from-image support is provider/model dependent.**
+> “OpenAI-compatible” describes the API format; it does not guarantee that a
+> provider accepts image inputs, supports base64 data-URL images, or that its
+> selected model can understand images or solve math shown in them. Magic Pointer
+> sends selected screenshots as JPEG `image_url` data URLs. For questions about
+> screenshots—especially equations or other math—verify that both the provider
+> endpoint and the exact model support this image format and have vision and
+> math reasoning capabilities. Text-only models may reject or ignore the image;
+> the custom-provider path cannot add capabilities the service does not offer.
+
 ## Getting started
 
 Install [Windhawk](https://windhawk.net/), open **Explore**, and search for
@@ -79,6 +98,22 @@ isn't available, a faster one answers instead.
 **Smart suggestions** are optional and disabled by default. When enabled,
 the assistant suggests up to three things to do with each selection.
 
+### Custom-provider errors
+
+- **Invalid Base URL:** enter an HTTPS cloud base URL without a query or
+  fragment. The mod appends `/chat/completions`; localhost and loopback URLs
+  are not supported.
+- **Model or endpoint not found:** check both the provider's Base URL and the
+  exact model ID copied from its current catalog.
+- **Rejected API key:** confirm the key belongs to the provider selected by
+  the custom Base URL. A custom Base URL overrides API-key auto-detection.
+- **Unsupported image:** the provider and model must accept `image_url` JPEG
+  data URLs and support vision. Math-from-image ability is a separate model
+  capability; use a vision model with suitable math reasoning.
+- **Rate limit:** wait and retry, and check the provider's usage limits or
+  account quota. The mod reports provider rate-limit responses; it does not
+  guarantee a retry will succeed.
+
 ## Languages
 
 The hint, the card, its buttons and its messages appear in your Windows display
@@ -110,6 +145,20 @@ and temporary-file details.
 [Open an issue](https://github.com/rono-zeroseven/magic-pointer/issues) with your
 Windows version, Windhawk version, Magic Pointer version, and steps to reproduce
 the problem. Include screenshots when useful and remove private content.
+
+## Changelog
+
+### v1.0.5
+
+- Added Base URL and Custom model settings for cloud OpenAI-compatible Chat
+  Completions APIs.
+- Added streamed answers and JPEG data-URL image payloads for providers and
+  models that support them.
+- Kept built-in Gemini, ChatGPT and Claude routing unchanged when the custom
+  Base URL is empty.
+- Documented that API-format compatibility does not guarantee image input or
+  math-from-image capability; check both provider and model before relying on
+  screenshot questions.
 
 ## License
 
